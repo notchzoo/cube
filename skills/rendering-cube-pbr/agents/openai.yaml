@@ -1,0 +1,6 @@
+interface:
+  display_name: "Rendering Cube PBR"
+  short_description: "创建和维护 GLFW OpenGL PBR 渲染项目"
+  default_prompt: "Use $rendering-cube-pbr to build or extend a maintainable GLFW OpenGL PBR rendering project."
+policy:
+  allow_implicit_invocation: true
