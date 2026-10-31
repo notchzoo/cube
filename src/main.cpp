@@ -17,6 +17,13 @@ struct Options
     bool pips = true;
     bool spin = true;
     float spinAngleDegrees = -1.0f;   // 负数表示"用 Application 的默认角度"
+    bool hasSunRadiance = false;
+    float sunRadiance = 0.0f;
+    std::string sunTexturePath;
+    bool hasCameraPose = false;
+    glm::vec3 cameraPosition{ 0.0f, 3.0f, 6.6f };
+    float cameraYawDegrees = -90.0f;
+    float cameraPitchDegrees = -20.0f;
     std::string screenshotPath;
     bool overrideCubeMaterial = false;
     float cubeRoughness = 0.28f;
@@ -72,6 +79,32 @@ int main(int argc, char** argv)
         {
             readFloatArgument(argc, argv, i, options.spinAngleDegrees);
         }
+        else if (std::strcmp(argv[i], "--sun") == 0)
+        {
+            options.hasSunRadiance = readFloatArgument(argc, argv, i, options.sunRadiance);
+        }
+        else if (std::strcmp(argv[i], "--sun-texture") == 0 && i + 1 < argc)
+        {
+            options.sunTexturePath = argv[i + 1];
+            ++i;
+        }
+        else if (std::strcmp(argv[i], "--camera") == 0 && i + 5 < argc)
+        {
+            // --camera x y z yaw pitch
+            float values[5] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+            bool ok = true;
+            for (int component = 0; component < 5 && ok; ++component)
+            {
+                ok = readFloatArgument(argc, argv, i, values[component]);
+            }
+            if (ok)
+            {
+                options.hasCameraPose = true;
+                options.cameraPosition = glm::vec3(values[0], values[1], values[2]);
+                options.cameraYawDegrees = values[3];
+                options.cameraPitchDegrees = values[4];
+            }
+        }
         else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc)
         {
             options.screenshotPath = argv[i + 1];
@@ -119,6 +152,23 @@ int main(int argc, char** argv)
     if (options.spinAngleDegrees >= 0.0f)
     {
         application.setCubeSpinAngle(glm::radians(options.spinAngleDegrees));
+    }
+
+    // 太阳：只调独立图层的接口，不碰天空/材质/渲染器。
+    if (options.hasSunRadiance)
+    {
+        SunStyle sunStyle = application.sunStyle();
+        sunStyle.radiance = options.sunRadiance;
+        application.setSunStyle(sunStyle);
+    }
+    if (!options.sunTexturePath.empty())
+    {
+        application.setSunTexture(options.sunTexturePath);
+    }
+
+    if (options.hasCameraPose)
+    {
+        application.setCameraPose(options.cameraPosition, options.cameraYawDegrees, options.cameraPitchDegrees);
     }
 
     if (options.overrideCubeMaterial)

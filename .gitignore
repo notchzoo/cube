@@ -3,4 +3,7 @@
 /.vs/
 *.user
 *.suo
+
+# 截图/临时图像不入库，但示例太阳贴图要保留
 *.bmp
+!asset/texture/*.bmp

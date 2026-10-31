@@ -13,6 +13,7 @@
 #include "Shader.h"
 #include "ShadowMap.h"
 #include "SkyDome.h"
+#include "SunSprite.h"
 
 struct GLFWwindow;
 
@@ -77,6 +78,17 @@ public:
     void setObjectOpacity(float opacity);
 
     void enableShadows(bool enabled);
+
+    // --- 太阳（独立图层，可整体移除）----------------------------------------
+    // 太阳位置由光方向决定（sunDir = -light.direction），不引入新的场景状态。
+    // 换"材质"只需 setSunStyle()，或 setSunTexture() 给一张 BMP（亮度当 alpha）。
+    void setSunStyle(const SunStyle& style);
+    const SunStyle& sunStyle() const;
+    bool setSunTexture(const std::string& path);
+    void clearSunTexture();
+
+    /// 仅用于截图/调试：直接摆放相机（yaw / pitch 单位为度）。
+    void setCameraPose(const glm::vec3& position, float yawDegrees, float pitchDegrees);
 
     /// 关闭后释放鼠标并忽略视角增量；便于截图核对或演示。
     void setMouseLookEnabled(bool enabled);
@@ -152,6 +164,7 @@ private:
     PBRRenderer m_pbrRenderer;
     ShadowMap m_shadowMap;
     SkyDome m_skyDome;
+    SunSprite m_sun;
     Shader m_shadowDepthShader;
 
     glm::mat4 m_cubeModel{ 1.0f };

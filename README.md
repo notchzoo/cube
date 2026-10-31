@@ -1,5 +1,7 @@
 # RenderingCube
 
+> **当前版本：v0.11**（2026-10-31）· 变更见 [CHANGELOG.md](CHANGELOG.md) · 完整手册见 [docs/MANUAL.md](docs/MANUAL.md)
+
 基于 GLFW + GLAD + GLM 的 OpenGL 3.3 Core 渲染示例：硬边立方体落在超大地面片上，
 Cook-Torrance PBR（GGX / Smith / Schlick Fresnel）、方向光阴影贴图（3x3 PCF）、
 程序化天空球与粗糙度感知的环境反射近似，最后走 Reinhard 色调映射 + Gamma 校正。
@@ -116,12 +118,14 @@ glframework/
   Camera.h/.cpp         视角与移动（帧时间缩放）
   ShadowMap.h/.cpp      深度纹理 + 深度-only 帧缓冲 + 光源正交矩阵
   SkyDome.h/.cpp        程序化天空球（内视、去平移、深度压到远平面）
+  SunSprite.h/.cpp      可选太阳图层（billboard、程序化或 BMP 贴图材质）
   geometry/Mesh.h/.cpp  VAO + position/color/normal 三个 VBO + EBO
   lighting/
     DirectionalLight.h  方向 + 辐照度（没有物理位置）
     PBRMaterial.h       材质参数与夹紧
     PBRRenderer.h/.cpp  PBR Shader 与全部 uniform 命名
-asset/shader/           pbr / shadowDepth / skyDome 三组着色器
+asset/shader/           pbr / shadowDepth / skyDome / sun 四组着色器
+asset/texture/          sun_soft.bmp（太阳示例材质）
 src/main.cpp            命令行解析 + 少量默认配置
 ```
 
@@ -153,7 +157,8 @@ src/main.cpp            命令行解析 + 少量默认配置
 - 阴影：深度 pass 只写投射者（立方体）的深度，并且只画背面；地面是纯接收者，
   不写进 shadow map —— 否则地面会和自己比较，必须加 polygon offset 把阴影整体推开，
   而那一步正是"立方体脚下亮缝"的主因。地面不参与后，既无地面自阴影，也不需要 offset，
-  阴影就能贴住接触点。立方体底面离地 5mm，避免和地面共面 z-fighting。
+  阴影就能贴住接触点。立方体底面高度由 `kCubeCenterHeight` 决定（默认 0.805 → 离地 5mm），
+  避免与地面共面 z-fighting。
 - 光源正交框 ±9、深度范围压到 15–21（而不是 0.5–40）：同样大小的 NDC 偏移换算成世界
   单位小一个数量级，阴影不会"缩离"投影体。
 - 采样用斜率相关偏移 + 白色边界（超出光源视锥按受光处理）+ 3x3 PCF。
@@ -194,3 +199,19 @@ src/main.cpp            命令行解析 + 少量默认配置
 关闭阴影（`--no-shadow`）用于对比直射光的贡献：
 
 ![关闭阴影](docs/renderingcube-no-shadow.png)
+
+## 太阳图层（SunSprite）
+
+独立、可整体移除的太阳：`glframework/SunSprite.*` + `asset/shader/sun.vert|frag`，
+位置由光方向决定（`sunDir = -light.direction`），所以太阳与阴影天然一致。
+
+- 不修改天空 / PBR / 现有着色器；删掉 `Application` 里的 `m_sun.render(...)` 就等于删掉太阳。
+- 换材质两种方式：`setSunStyle(SunStyle{...})` 调参数，或 `setSunTexture("asset/texture/sun_soft.bmp")`
+  换成贴图（约定"亮度当 alpha"，白色不透明、黑色透明）。
+- 命令行：`--sun <radiance>`、`--sun-texture <file.bmp>`、`--camera x y z yaw pitch`。
+
+![太阳](docs/renderingcube-sun.png)
+
+![贴图太阳](docs/renderingcube-sun-texture.png)
+
+已知取舍：太阳没有进入 `proceduralSky()`，因此骰子的环境反射里看不到它（低耦合的代价）。

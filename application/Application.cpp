@@ -21,7 +21,7 @@ constexpr float kCameraNearPlane = 0.1f;
 constexpr float kCameraFarPlane = 4000.0f;
 constexpr float kGroundHalfExtent = 1200.0f;
 constexpr float kCubeScale = 0.8f;              // 单位立方体 -> 边长 1.6
-constexpr float kCubeCenterHeight = 1.95f;     // 底面离地 5mm，阴影贴合地面
+constexpr float kCubeCenterHeight = 1.95f;      // 中心高度；底面 = 该值 - kCubeScale
 constexpr int kCubeIndicesPerFace = 6;
 
 // --- 交互常量 -------------------------------------------------------------
@@ -237,6 +237,34 @@ void Application::setPipsEnabled(bool enabled)
     m_pipsEnabled = enabled;
 }
 
+// --- 太阳 -----------------------------------------------------------------
+
+void Application::setSunStyle(const SunStyle& style)
+{
+    m_sun.setStyle(style);
+}
+
+const SunStyle& Application::sunStyle() const
+{
+    return m_sun.style();
+}
+
+bool Application::setSunTexture(const std::string& path)
+{
+    return m_sun.setTextureFromBmp(path);
+}
+
+void Application::clearSunTexture()
+{
+    m_sun.clearTexture();
+}
+
+void Application::setCameraPose(const glm::vec3& position, float yawDegrees, float pitchDegrees)
+{
+    m_camera.setPosition(position);
+    m_camera.setYawPitch(yawDegrees, pitchDegrees);
+}
+
 void Application::setReflectionStrength(float strength)
 {
     m_reflectionStrength = std::clamp(strength, 0.0f, 1.0f);
@@ -412,6 +440,12 @@ bool Application::loadShaders()
     {
         return false;
     }
+
+    // 太阳是可选图层：它自己的 shader 缺失时只禁用太阳，场景照常运行。
+    if (!m_sun.initialize(assetDirectory))
+    {
+        std::cerr << "[Application] sun sprite disabled (shader missing)\n";
+    }
     return true;
 }
 
@@ -423,6 +457,7 @@ void Application::releaseResources()
     }
 
     // 顺序：先释放 GL 资源（上下文仍有效），再销毁窗口。
+    m_sun.reset();
     m_skyDome.reset();
     m_shadowMap.reset();
     m_shadowDepthShader.reset();
@@ -610,6 +645,9 @@ void Application::renderScene()
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     m_skyDome.render(viewMatrix, projectionMatrix);
+
+    // 太阳：独立图层，位置由光方向决定（太阳在 -光传播方向）；不碰天空与 PBR 的任何状态。
+    m_sun.render(m_camera.position(), viewMatrix, projectionMatrix, -lightDirection);
 
     m_pbrRenderer.beginFrame(viewMatrix,
                              projectionMatrix,

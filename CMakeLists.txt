@@ -51,6 +51,8 @@ set(RENDERINGCUBE_SOURCES
     glframework/ShadowMap.cpp
     glframework/SkyDome.h
     glframework/SkyDome.cpp
+    glframework/SunSprite.h
+    glframework/SunSprite.cpp
 
     glframework/geometry/Mesh.h
     glframework/geometry/Mesh.cpp
@@ -66,6 +68,8 @@ set(RENDERINGCUBE_SOURCES
     asset/shader/shadowDepth.frag
     asset/shader/skyDome.vert
     asset/shader/skyDome.frag
+    asset/shader/sun.vert
+    asset/shader/sun.frag
 )
 
 add_executable(RenderingCube ${RENDERINGCUBE_SOURCES})
