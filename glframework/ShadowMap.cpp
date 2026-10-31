@@ -1,18 +1,6 @@
 #include "ShadowMap.h"
 
-#include <cmath>
 #include <iostream>
-
-#include <glm/gtc/matrix_transform.hpp>
-
-namespace
-{
-// 阴影正交投影覆盖的场景范围（世界单位）。太大会让每个纹素覆盖过宽、边缘发糊。
-constexpr float kOrthoHalfExtent = 9.0f;
-constexpr float kLightCameraDistance = 18.0f;
-constexpr float kDepthNear = 15.0f;
-constexpr float kDepthFar = 21.0f;
-}
 
 ShadowMap::~ShadowMap()
 {
@@ -84,28 +72,4 @@ void ShadowMap::unbind(GLuint framebufferId, unsigned int framebufferWidth, unsi
 {
     glBindFramebuffer(GL_FRAMEBUFFER, framebufferId);
     glViewport(0, 0, static_cast<GLsizei>(framebufferWidth), static_cast<GLsizei>(framebufferHeight));
-}
-
-glm::mat4 ShadowMap::lightSpaceMatrix(const glm::vec3& lightDirection) const
-{
-    // 立方体中心附近的场景中心：阴影相机瞄准这里。
-    const glm::vec3 sceneCenter(0.0f, 1.0f, 0.0f);
-
-    const float length = glm::length(lightDirection);
-    const glm::vec3 direction = (length < 1e-5f) ? glm::vec3(0.0f, -1.0f, 0.0f) : lightDirection / length;
-
-    // 沿光线反向后退得到虚拟相机位置；它不代表灯光有实体位置。
-    const glm::vec3 eye = sceneCenter - direction * kLightCameraDistance;
-
-    glm::vec3 up(0.0f, 1.0f, 0.0f);
-    if (std::abs(glm::dot(direction, up)) > 0.99f)
-    {
-        up = glm::vec3(0.0f, 0.0f, 1.0f);
-    }
-
-    const glm::mat4 lightView = glm::lookAt(eye, sceneCenter, up);
-    const glm::mat4 lightProjection = glm::ortho(-kOrthoHalfExtent, kOrthoHalfExtent,
-                                                 -kOrthoHalfExtent, kOrthoHalfExtent,
-                                                 kDepthNear, kDepthFar);
-    return lightProjection * lightView;
 }

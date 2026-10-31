@@ -1,9 +1,13 @@
 #include "Application.h"
+#include "AttackHelicopterGeometry.h"
+#include "AttackHelicopterObject.h"
 
 #include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 #include <vector>
 
 #include <glad/glad.h>
@@ -22,7 +26,8 @@ constexpr float kCameraFarPlane = 4000.0f;
 constexpr float kGroundHalfExtent = 1200.0f;
 constexpr float kCubeScale = 0.8f;              // 单位立方体 -> 边长 1.6
 constexpr float kCubeCenterHeight = 1.95f;      // 中心高度；底面 = 该值 - kCubeScale
-constexpr int kCubeIndicesPerFace = 6;
+constexpr float kCubeInitialSpinDegrees = 28.0f; // 初始自转角：三个面同时可见
+const glm::vec3 kCubeSpinAxis(1.0f, 1.0f, 1.0f); // 旋转轴（工作区当前值；改回 (0,1,0) 即绕竖轴）
 
 // --- 交互常量 -------------------------------------------------------------
 constexpr float kMaxFrameDelta = 0.1f;
@@ -102,24 +107,8 @@ Application::Application(int width, int height, const char* title)
     m_camera.setPosition(glm::vec3(0.0f, 3.0f, 6.6f));
     m_camera.setYawPitch(-90.0f, -20.0f);
 
-    // 几何体是单位立方体，位置、旋转与尺寸全部由 Model 矩阵给出；这样顶点着色器
-    // 里的对象空间坐标正好落在 [-1, 1]，骰子点数按面归一化时不需要额外 uniform。
-    // 初始角度取 28°：让 +Z / +X / +Y 三个面同时可见（点数 1 / 3 / 5）。
-    m_spinAngle = glm::radians(28.0f);
-    updateCubeModel();
-
-    m_groundModel = glm::mat4(1.0f);
-
-    // 骰子六面：颜色、粗糙度、金属度各不相同，方便一眼看出"每面一套材质"。
-    const std::array<PBRMaterial, kCubeFaceCount> defaultFaces = { {
-        { glm::vec3(0.86f, 0.20f, 0.16f), 0.0f, 0.35f, 1.0f, 1.0f },  // +Z 红
-        { glm::vec3(0.20f, 0.62f, 0.30f), 0.0f, 0.55f, 1.0f, 1.0f },  // -Z 绿
-        { glm::vec3(0.18f, 0.38f, 0.84f), 0.0f, 0.22f, 1.0f, 1.0f },  // +X 蓝
-        { glm::vec3(0.93f, 0.70f, 0.18f), 0.0f, 0.45f, 1.0f, 1.0f },  // -X 琥珀
-        { glm::vec3(0.88f, 0.88f, 0.86f), 0.0f, 0.12f, 1.0f, 1.0f },  // +Y 米白（高光最锐）
-        { glm::vec3(0.55f, 0.30f, 0.78f), 0.9f, 0.28f, 1.0f, 1.0f },  // -Y 紫色金属
-    } };
-    m_cubeFaceMaterials = defaultFaces;
+    // 场景对象（骰子、地面）在 initialize() 里创建：它们需要 GL 上下文。
+    // 皮肤、点数、自转默认值都在 DiceObject 内部，这里只给"摆在哪里、多大、初始角度"。
 }
 
 Application::~Application()
@@ -146,13 +135,14 @@ bool Application::initialize()
     return true;
 }
 
-void Application::run()
+void Application::run(float durationSeconds)
 {
     if (!m_initialized)
     {
         return;
     }
 
+    const double started=glfwGetTime();
     while (glfwWindowShouldClose(m_window) == GLFW_FALSE)
     {
         const double now = glfwGetTime();
@@ -161,22 +151,114 @@ void Application::run()
         // 断点/拖动窗口会让 delta 变得很大，夹紧避免相机瞬移。
         deltaSeconds = std::clamp(deltaSeconds, 0.0f, kMaxFrameDelta);
 
+        // [载具更新] 顺序固定：采集驾驶输入 -> 飞机物理/动画 -> 跟随相机 -> 渲染。
+        // 不要在 renderScene 的两个 pass 中推进物理或动画，否则一帧会积分两次。
         processInput(deltaSeconds);
         // 滚轮只累加目标高度，这里每帧平滑逼近，效果和按键一样连续。
-        m_camera.updateElevation(deltaSeconds);
+        if(!m_driving) m_camera.updateElevation(deltaSeconds);
 
-        // 自转推进：只有启用时才累加角度。暂停时角度停在原处，
-        // 恢复后从同一角度继续，因此不会出现跳变。
-        if (m_spinEnabled)
+        // 自转由对象自己推进：暂停时角度保留，恢复从原处继续。
+        if (m_dice != nullptr)
         {
-            m_spinAngle += m_spinSpeed * deltaSeconds;
-            wrapSpinAngle();
+            m_dice->update(deltaSeconds);
         }
+        if (m_helicopter != nullptr) m_helicopter->update(deltaSeconds);
+        updateVehicleCamera(deltaSeconds);
 
         renderScene();
 
         glfwSwapBuffers(m_window);
         glfwPollEvents();
+        if (durationSeconds>0 && glfwGetTime()-started>=durationSeconds) break;
+    }
+}
+
+void Application::setHelicopterRotorsEnabled(bool enabled)
+{
+    if (m_helicopter) m_helicopter->setRotorsEnabled(enabled);
+}
+
+void Application::setHelicopterPose(float mainRotor,float tailRotor,float tailPitch,float stabilator)
+{
+    if (!m_helicopter) return;
+    m_helicopter->setRotorAngles(mainRotor,tailRotor);
+    m_helicopter->setControlAngles(tailPitch,stabilator);
+}
+
+// [驾驶交互] G 与 --drive 共用的唯一切换入口；距离检查必须先于任何驾驶状态修改。
+// 进入：检查座舱距离 -> 启用物理 -> 记录机头航向 -> 初始化第三人称相机。
+// 退出：清空驾驶输入，保留飞机物理状态，让自由相机留在当前观察位置。
+void Application::setDriving(bool enabled)
+{
+    if(!m_helicopter || m_driving==enabled) return;
+    if(enabled && !m_helicopter->canEnterFrom(m_camera.position()))
+    {
+        updateInteractionPrompt();
+        std::cout<<"[Driving] out of reach; approach the cockpit before pressing G\n";
+        return;
+    }
+    m_driving=enabled;
+    m_helicopter->clearFlightControls();
+    m_firstMouseEvent=true;m_titleUpdateTime=0;
+    if(enabled)
+    {
+        m_helicopter->enableFlightPhysics();
+        const auto aircraftForward=m_helicopter->forwardDirection();
+        m_pilotHeading=std::atan2(-aircraftForward.z,aircraftForward.x);
+        m_chaseCamera.enter(m_helicopter->focusPoint(),aircraftForward,m_camera);
+        std::cout<<"[Driving] entered; WASD move, Space/Ctrl climb, Q/E yaw, G exit\n";
+    }
+    else
+    {
+        // Leave the free camera at its current safe chase-camera position.
+        m_camera.setPosition(m_camera.position());
+        updateInteractionPrompt();
+        std::cout<<"[Driving] exited; free camera restored\n";
+    }
+}
+
+// [驾驶交互] 自由观察时的标题提示；锚点和距离读取当前飞机 Model，因此会跟随飞机移动。
+void Application::updateInteractionPrompt()
+{
+    if(!m_window || !m_helicopter || m_driving) return;
+    std::string prompt=m_title;
+    if(m_helicopter->canEnterFrom(m_camera.position())) prompt+=" | 按 G 驾驶直升机";
+    else
+    {
+        const float unitsPerMeter=glm::length(glm::vec3(m_helicopter->modelMatrix()[0]))/2;
+        const float metres=glm::distance(m_camera.position(),m_helicopter->interactionPoint())/std::max(.0001f,unitsPerMeter);
+        std::ostringstream distance;distance<<std::fixed<<std::setprecision(1)<<metres;
+        prompt+=" | 靠近座舱后按 G 驾驶 | 距离 "+distance.str()+" m";
+    }
+    glfwSetWindowTitle(m_window,prompt.c_str());
+}
+
+// [第三人称相机] run 在飞机 update 之后调用；此处跟随最新机体位置，并调整阴影覆盖范围。
+// 自由模式只更新交互提示，不把自由相机拉回飞机。
+void Application::updateVehicleCamera(float dt)
+{
+    if(!m_helicopter) return;
+    if(m_helicopter->flightPhysicsEnabled())
+    {
+        const auto position=glm::vec3(m_helicopter->modelMatrix()[3]);
+        const auto direction=m_lightRig.normalizedDirection();
+        const auto shadow=position+direction*(position.y/std::max(.15f,-direction.y));
+        m_lightRig.setShadowFocus((position+shadow)*.5f,std::max(9.0f,glm::distance(position,shadow)*.6f+5));
+    }
+    m_titleUpdateTime-=dt;
+    if(!m_driving)
+    {
+        if(m_titleUpdateTime<=0) {updateInteractionPrompt();m_titleUpdateTime=.25f;}
+        return;
+    }
+    m_chaseCamera.update(m_helicopter->focusPoint(),dt,m_camera);
+    if(m_titleUpdateTime<=0)
+    {
+        const auto& state=m_helicopter->dynamics().state();
+        const std::string title="驾驶 | WASD移动 空格升/Ctrl降 Q/E转向 G退出 | "+
+            std::to_string(static_cast<int>(glm::length(state.velocity)*3.6f))+" km/h | 高度 "+
+            std::to_string(static_cast<int>(state.position.y))+" m";
+        glfwSetWindowTitle(m_window,title.c_str());m_titleUpdateTime=.25f;
     }
 }
 
@@ -184,57 +266,53 @@ void Application::run()
 
 void Application::setDirectionalLight(const DirectionalLight& light)
 {
-    m_light = light;
+    m_lightRig.setLight(light);
 }
 
 void Application::setLightDirection(const glm::vec3& direction)
 {
-    const float length = glm::length(direction);
-    if (length < 1e-5f)
-    {
-        std::cerr << "[Application] light direction is almost zero, ignored\n";
-        return;
-    }
-    m_light.direction = direction / length;
+    m_lightRig.setDirection(direction);
 }
 
 void Application::setCubeMaterial(const PBRMaterial& material)
 {
-    const PBRMaterial sanitized = material.clamped();
-    for (PBRMaterial& face : m_cubeFaceMaterials)
+    if (m_dice == nullptr)
     {
-        face = sanitized;
+        std::cerr << "[Application] setCubeMaterial ignored before initialize()\n";
+        return;
     }
+    m_dice->setAllFaceMaterials(material);
 }
 
 void Application::setCubeFaceMaterial(int face, const PBRMaterial& material)
 {
-    if (face < 0 || face >= kCubeFaceCount)
+    if (m_dice == nullptr)
     {
-        std::cerr << "[Application] cube face index out of range: " << face << '\n';
+        std::cerr << "[Application] setCubeFaceMaterial ignored before initialize()\n";
         return;
     }
-    m_cubeFaceMaterials[static_cast<size_t>(face)] = material.clamped();
+    m_dice->setFaceMaterial(face, material);
 }
 
 PBRMaterial Application::cubeFaceMaterial(int face) const
 {
-    if (face < 0 || face >= kCubeFaceCount)
-    {
-        std::cerr << "[Application] cube face index out of range: " << face << '\n';
-        return PBRMaterial{};
-    }
-    return m_cubeFaceMaterials[static_cast<size_t>(face)];
+    return (m_dice != nullptr) ? m_dice->faceMaterial(face) : PBRMaterial{};
 }
 
 void Application::setGroundMaterial(const PBRMaterial& material)
 {
-    m_groundMaterial = material.clamped();
+    if (m_ground != nullptr)
+    {
+        m_ground->setMaterial(material);
+    }
 }
 
 void Application::setPipsEnabled(bool enabled)
 {
-    m_pipsEnabled = enabled;
+    if (m_dice != nullptr)
+    {
+        m_dice->setPipsEnabled(enabled);
+    }
 }
 
 // --- 太阳 -----------------------------------------------------------------
@@ -263,6 +341,7 @@ void Application::setCameraPose(const glm::vec3& position, float yawDegrees, flo
 {
     m_camera.setPosition(position);
     m_camera.setYawPitch(yawDegrees, pitchDegrees);
+    updateInteractionPrompt();
 }
 
 void Application::setReflectionStrength(float strength)
@@ -272,7 +351,20 @@ void Application::setReflectionStrength(float strength)
 
 void Application::setObjectOpacity(float opacity)
 {
-    m_cubeOpacity = std::clamp(opacity, 0.0f, 1.0f);
+    if (m_dice != nullptr)
+    {
+        m_dice->setOpacity(opacity);
+    }
+}
+
+float Application::objectOpacity() const
+{
+    return (m_dice != nullptr) ? m_dice->opacity() : 1.0f;
+}
+
+bool Application::pipsEnabled() const
+{
+    return (m_dice != nullptr) && m_dice->pipsEnabled();
 }
 
 void Application::enableShadows(bool enabled)
@@ -284,47 +376,49 @@ void Application::enableShadows(bool enabled)
 
 void Application::setCubeSpinEnabled(bool enabled)
 {
-    m_spinEnabled = enabled;
+    if (m_dice != nullptr)
+    {
+        m_dice->setSpinEnabled(enabled);
+    }
 }
 
 void Application::toggleCubeSpin()
 {
-    m_spinEnabled = !m_spinEnabled;
+    if (m_dice != nullptr)
+    {
+        m_dice->toggleSpin();
+    }
 }
 
 void Application::setCubeSpinSpeed(float radiansPerSecond)
 {
-    // 允许负值（反向旋转），只把离谱的量级挡掉，避免浮点溢出成 NaN。
-    m_spinSpeed = std::clamp(radiansPerSecond, -20.0f, 20.0f);
+    if (m_dice != nullptr)
+    {
+        m_dice->setSpinSpeed(radiansPerSecond);
+    }
 }
 
 void Application::setCubeSpinAngle(float radians)
 {
-    m_spinAngle = radians;
-    wrapSpinAngle();
-    // 立即反映到模型矩阵上，保证截图/下一帧前状态一致。
-    updateCubeModel();
-}
-
-void Application::wrapSpinAngle()
-{
-    constexpr float kTwoPi = 6.28318530717958647692f;
-    m_spinAngle = std::fmod(m_spinAngle, kTwoPi);
-    if (m_spinAngle < 0.0f)
+    if (m_dice != nullptr)
     {
-        m_spinAngle += kTwoPi;
+        m_dice->setSpinAngle(radians);
     }
 }
 
-void Application::updateCubeModel()
+bool Application::cubeSpinEnabled() const
 {
-    // 顺序：先缩放（单位立方体 -> 边长 1.6），再自转，最后抬到离地高度。
-    // 这里只改模型矩阵，着色器完全不需要知道"时间"或"角度"。
-    const glm::mat4 translation = glm::translate(glm::mat4(1.0f),
-                                                 glm::vec3(0.0f, kCubeCenterHeight, 0.0f));
-    const glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), m_spinAngle, glm::vec3(0.0f, 1.0f, 0.0f));
-    const glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(kCubeScale));
-    m_cubeModel = translation * rotation * scale;
+    return (m_dice != nullptr) && m_dice->spinEnabled();
+}
+
+float Application::cubeSpinAngle() const
+{
+    return (m_dice != nullptr) ? m_dice->spinAngle() : 0.0f;
+}
+
+float Application::cubeSpinSpeed() const
+{
+    return (m_dice != nullptr) ? m_dice->spinSpeed() : 0.0f;
 }
 
 // --- 窗口与资源 -----------------------------------------------------------
@@ -440,6 +534,11 @@ bool Application::loadShaders()
     {
         return false;
     }
+    if(!m_speedometer.initialize(assetDirectory))
+    {
+        std::cerr<<"[Application] speed display initialization failed\n";
+        return false;
+    }
 
     // 太阳是可选图层：它自己的 shader 缺失时只禁用太阳，场景照常运行。
     if (!m_sun.initialize(assetDirectory))
@@ -458,12 +557,18 @@ void Application::releaseResources()
 
     // 顺序：先释放 GL 资源（上下文仍有效），再销毁窗口。
     m_sun.reset();
+    m_speedometer.reset();
     m_skyDome.reset();
     m_shadowMap.reset();
     m_shadowDepthShader.reset();
     m_pbrRenderer.reset();
-    m_groundMesh.reset();
-    m_cubeMesh.reset();
+
+    // 场景对象持有 Mesh（GL 资源），必须在上下文仍有效时销毁。
+    m_scene.clear();
+    m_dice = nullptr;
+    m_ground = nullptr;
+    m_helicopter = nullptr;
+    m_driving=false;
 
     glfwDestroyWindow(m_window);
     m_window = nullptr;
@@ -471,88 +576,48 @@ void Application::releaseResources()
     m_initialized = false;
 }
 
-// --- 场景几何 -------------------------------------------------------------
+// --- 场景 -----------------------------------------------------------------
 
 void Application::createScene()
 {
-    createCubeGeometry();
-    createGroundGeometry();
-}
+    // 地面：纯接收者，不写进阴影贴图（原因见 renderScene 的说明）。
+    const PBRMaterial groundMaterial{ glm::vec3(0.60f, 0.60f, 0.58f), 0.0f, 0.90f, 1.0f, 1.0f };
+    m_ground = &m_scene.add<MeshObject>(MeshObject::createGroundMesh(kGroundHalfExtent), groundMaterial);
+    m_ground->setCastsShadow(false);
 
-void Application::createCubeGeometry()
-{
-    // 硬边立方体：每个面 4 个独立顶点，法线在面内恒定，共 24 顶点 36 索引。
-    const glm::vec3 faceNormals[6] = {
-        glm::vec3(0.0f, 0.0f, 1.0f),
-        glm::vec3(0.0f, 0.0f, -1.0f),
-        glm::vec3(1.0f, 0.0f, 0.0f),
-        glm::vec3(-1.0f, 0.0f, 0.0f),
-        glm::vec3(0.0f, 1.0f, 0.0f),
-        glm::vec3(0.0f, -1.0f, 0.0f),
-    };
-
-    std::vector<glm::vec3> positions;
-    std::vector<glm::vec3> colors;
-    std::vector<glm::vec3> normals;
-    std::vector<unsigned int> indices;
-    positions.reserve(24);
-    colors.reserve(24);
-    normals.reserve(24);
-    indices.reserve(36);
-
-    for (const glm::vec3& normal : faceNormals)
+    // 骰子：单位立方体 + 六面材质 + 点数 + 自转，全部封装在 DiceObject。
+    if (!m_aircraftOnly)
     {
-        // 为每个面构造切向/副切向：tangent x bitangent = normal，保证绕序一致。
-        const glm::vec3 tangent = (std::abs(normal.y) > 0.9f)
-            ? glm::vec3(1.0f, 0.0f, 0.0f)
-            : glm::normalize(glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), normal));
-        const glm::vec3 bitangent = glm::cross(normal, tangent);
-
-        const unsigned int base = static_cast<unsigned int>(positions.size());
-        const glm::vec3 corners[4] = {
-            -tangent - bitangent,
-            tangent - bitangent,
-            tangent + bitangent,
-            -tangent + bitangent,
-        };
-
-        for (const glm::vec3& corner : corners)
-        {
-            // Offset along the face normal: without it every face would lie in
-            // the plane through the cube center and the six quads would intersect.
-            // Unit cube: object-space coordinates stay in [-1, 1], so the shader
-            // can lay out dice pips without knowing the model scale.
-            positions.push_back(corner + normal);
-            normals.push_back(normal);
-            // 固定 Mesh 布局包含颜色属性；PBR 反照率来自材质，这里填白色。
-            colors.push_back(glm::vec3(1.0f));
-        }
-
-        indices.push_back(base + 0);
-        indices.push_back(base + 1);
-        indices.push_back(base + 2);
-        indices.push_back(base + 0);
-        indices.push_back(base + 2);
-        indices.push_back(base + 3);
+        m_dice = &m_scene.add<DiceObject>(DiceObject::createCubeMesh(),
+                                      kCubeCenterHeight,
+                                      kCubeScale,
+                                      glm::radians(kCubeInitialSpinDegrees),
+                                      kCubeSpinAxis);
     }
 
-    m_cubeMesh.upload(positions, colors, normals, indices);
+    // Reference-inspired attack helicopter; geometry is reusable independently of Scene.
+    const auto attackModel = glm::scale(
+        glm::translate(glm::mat4(1), glm::vec3(-2.8f, 1.0f, -1.4f)) *
+        glm::rotate(glm::mat4(1), glm::radians(-24.0f), glm::vec3(0, 1, 0)), glm::vec3(.50f));
+    const PBRMaterial attackMaterial{glm::vec3(1), .25f, .50f, 1.0f, 1.0f};
+    // [载具创建] GL 上下文已建立；生成四份部件网格，再交给 Scene 持有载具对象。
+    // 若增加另一种载具，从此处替换/追加几何和 SceneObject，不要在渲染器中添加机型判断。
+    m_helicopter = &m_scene.add<AttackHelicopterObject>(AttackHelicopterGeometry::createMeshes(),attackMaterial,attackModel);
+    updateInteractionPrompt();
 }
 
-void Application::createGroundGeometry()
+void Application::drawItem(const DrawItem& item)
 {
-    const float extent = kGroundHalfExtent;
-    const std::vector<glm::vec3> positions = {
-        glm::vec3(-extent, 0.0f, -extent),
-        glm::vec3(-extent, 0.0f, extent),
-        glm::vec3(extent, 0.0f, extent),
-        glm::vec3(extent, 0.0f, -extent),
-    };
-    const std::vector<glm::vec3> normals(4, glm::vec3(0.0f, 1.0f, 0.0f));
-    const std::vector<glm::vec3> colors(4, glm::vec3(1.0f));
-    const std::vector<unsigned int> indices = { 0, 1, 2, 0, 2, 3 };
-
-    m_groundMesh.upload(positions, colors, normals, indices);
+    if (item.mesh == nullptr)
+    {
+        return;
+    }
+    m_pbrRenderer.draw(*item.mesh,
+                       item.model,
+                       item.material,
+                       item.pipCount,
+                       item.firstIndex,
+                       item.indexCount);
 }
 
 // --- 输入 -----------------------------------------------------------------
@@ -572,6 +637,11 @@ void Application::processInput(float deltaSeconds)
         return positiveValue - negativeValue;
     };
 
+    // [驾驶交互] G 仅在按下边沿触发；离得太远时按住 G 再靠近，也不会自动进入。
+    const bool interactDown=glfwGetKey(m_window,GLFW_KEY_G)==GLFW_PRESS;
+    if(interactDown && !m_interactWasDown) setDriving(!m_driving);
+    m_interactWasDown=interactDown;
+
     float forward = axis(GLFW_KEY_W, GLFW_KEY_S);
     const float right = axis(GLFW_KEY_D, GLFW_KEY_A);
     const float worldUp = axis(GLFW_KEY_PAGE_UP, GLFW_KEY_PAGE_DOWN);
@@ -583,22 +653,51 @@ void Application::processInput(float deltaSeconds)
 
     // 空格切换自转：必须做边沿检测。直接 if (spaceDown) toggle() 会在按住的每一帧翻转。
     const bool spaceDown = (glfwGetKey(m_window, GLFW_KEY_SPACE) == GLFW_PRESS);
-    if (spaceDown && !m_spaceWasDown)
+    if (spaceDown && !m_spaceWasDown && !m_driving)
     {
         toggleCubeSpin();
     }
     m_spaceWasDown = spaceDown;
 
-    m_camera.moveLocal(forward, right, worldUp, deltaSeconds);
+    if (m_helicopter)
+    {
+        const bool rotorToggleDown=glfwGetKey(m_window,GLFW_KEY_R)==GLFW_PRESS;
+        if (rotorToggleDown && !m_rotorToggleWasDown) m_helicopter->toggleRotors();
+        m_rotorToggleWasDown=rotorToggleDown;
+        if(m_driving)
+        {
+            // [驾驶输入] 机头航向只由 Q/E 积分；鼠标只改变观察轨道。
+            const float pedals=axis(GLFW_KEY_E,GLFW_KEY_Q);
+            // Mouse orbit is free-look only. E turns the nose right, which is
+            // negative world-Y yaw for the aircraft's +X forward convention.
+            m_pilotHeading=std::remainder(m_pilotHeading-glm::radians(pedals*70*deltaSeconds),6.28318530718f);
+            flight::FlightControls controls;
+            const float speed=m_helicopter->dynamics().parameters().maxSpeed*
+                (glfwGetKey(m_window,GLFW_KEY_LEFT_SHIFT)==GLFW_PRESS?1.6f:1.0f);
+            // Movement follows the aircraft's actual heading, not the free-look camera.
+            controls.horizontalVelocity=m_helicopter->movementDirection(axis(GLFW_KEY_W,GLFW_KEY_S),right)*speed;
+            // [驾驶输入] 升降独立于机头倾角/相机 pitch，避免抬头看就上升。
+            controls.climb=std::clamp(worldUp+(spaceDown?1.0f:0.0f)-
+                (glfwGetKey(m_window,GLFW_KEY_LEFT_CONTROL)==GLFW_PRESS?1.0f:0.0f),-1.0f,1.0f);
+            controls.heading=m_pilotHeading;controls.pedals=-pedals;
+            controls.stabilatorTrim=axis(GLFW_KEY_C,GLFW_KEY_Z);
+            m_helicopter->setFlightControls(controls);
+        }
+        else if(m_helicopter->flightPhysicsEnabled()) m_helicopter->clearFlightControls();
+        else
+        {
+            m_helicopter->setPedalInput(axis(GLFW_KEY_E,GLFW_KEY_Q));
+            m_helicopter->setStabilatorInput(axis(GLFW_KEY_C,GLFW_KEY_Z));
+        }
+    }
+
+    if(!m_driving) m_camera.moveLocal(forward, right, worldUp, deltaSeconds);
 }
 
 // --- 渲染 -----------------------------------------------------------------
 
 void Application::renderScene()
 {
-    // 自转角度 -> 模型矩阵。放在所有 pass 之前，保证阴影 pass 与主 pass 用同一份变换。
-    updateCubeModel();
-
     const glm::mat4 viewMatrix = m_camera.viewMatrix();
     const float aspectRatio = (m_framebufferHeight > 0)
         ? static_cast<float>(m_framebufferWidth) / static_cast<float>(m_framebufferHeight)
@@ -608,9 +707,14 @@ void Application::renderScene()
                                                         kCameraNearPlane,
                                                         kCameraFarPlane);
 
-    const glm::vec3 lightDirection = m_light.normalizedDirection();
-    m_lightSpaceMatrix = m_shadowMap.lightSpaceMatrix(lightDirection);
+    const glm::mat4 lightSpaceMatrix = m_lightRig.lightSpaceMatrix();
     const bool shadowsActive = m_shadowsEnabled && (m_shadowMap.depthTexture() != 0);
+
+    // 场景只负责产出 DrawItem；下面两条 pass 只消费它，不认识骰子/地面。
+    m_drawItems.clear();
+    m_shadowItems.clear();
+    m_scene.appendDrawItems(m_drawItems);
+    m_scene.appendShadowItems(m_shadowItems);
 
     // ---- Pass 1: 深度 pass（光源视角）----
     if (shadowsActive)
@@ -618,21 +722,35 @@ void Application::renderScene()
         m_shadowMap.bindForWriting();
 
         m_shadowDepthShader.use();
-        m_shadowDepthShader.setMat4("uLightSpaceMatrix", m_lightSpaceMatrix);
+        m_shadowDepthShader.setMat4("uLightSpaceMatrix", lightSpaceMatrix);
 
         glDisable(GL_BLEND);
-        // 深度 pass 只写投射者（立方体）的深度。
-        // 地面是纯接收者：把它写进来只会自己和自己做深度比较，就必须靠 polygon offset
-        // 把阴影整体推开才能消 acne —— 而那一推正是立方体脚下那圈"亮缝"的来源。
-        // 不写地面，既没有地面自阴影，也不需要任何 offset，阴影就能贴住接触点。
+        // 只写投射者的深度：地面是纯接收者，写进来只会自己和自己比较，
+        // 就必须靠 polygon offset 把阴影整体推开——那正是脚下"亮缝"的来源。
+        // 闭合体按 DrawItem 的要求只画背面，避免受光面与自身比较产生 acne。
+        for (const DrawItem& item : m_shadowItems)
+        {
+            if (item.mesh == nullptr)
+            {
+                continue;
+            }
 
-        // 立方体是闭合体：只渲染背面写深度，受光面就不会和自己做深度比较（消除 acne）。
-        glEnable(GL_CULL_FACE);
-        glCullFace(GL_FRONT);
-        m_shadowDepthShader.setMat4("uModel", m_cubeModel);
-        m_cubeMesh.draw();
-        glCullFace(GL_BACK);
-        glDisable(GL_CULL_FACE);
+            const bool cullFront = (item.shadowCull == DrawItem::FaceCull::Front);
+            if (cullFront)
+            {
+                glEnable(GL_CULL_FACE);
+                glCullFace(GL_FRONT);
+            }
+
+            m_shadowDepthShader.setMat4("uModel", item.model);
+            item.mesh->draw();
+
+            if (cullFront)
+            {
+                glCullFace(GL_BACK);
+                glDisable(GL_CULL_FACE);
+            }
+        }
 
         m_shadowMap.unbind(m_sceneFramebuffer,
                            static_cast<unsigned int>(m_framebufferWidth),
@@ -646,60 +764,73 @@ void Application::renderScene()
 
     m_skyDome.render(viewMatrix, projectionMatrix);
 
-    // 太阳：独立图层，位置由光方向决定（太阳在 -光传播方向）；不碰天空与 PBR 的任何状态。
-    m_sun.render(m_camera.position(), viewMatrix, projectionMatrix, -lightDirection);
+    // 太阳：位置由灯光方向决定，和阴影同源。
+    m_sun.render(m_camera.position(), viewMatrix, projectionMatrix, m_lightRig.sunDirection());
 
     m_pbrRenderer.beginFrame(viewMatrix,
                              projectionMatrix,
                              m_camera.position(),
-                             m_light,
-                             m_lightSpaceMatrix,
+                             m_lightRig.light(),
+                             lightSpaceMatrix,
                              shadowsActive ? m_shadowMap.depthTexture() : 0,
                              shadowsActive,
                              m_reflectionStrength,
-                             // 投射者（立方体）的不透明度决定阴影有多深，
-                             // 与接收者自身材质无关。
-                             m_cubeOpacity);
+                             // 投射者不透明度决定阴影深度；多个投射者取最不透明者。
+                             m_scene.shadowCasterOpacity());
 
-    // 不透明几何先画：地面。
-    m_pbrRenderer.draw(m_groundMesh, m_groundModel, m_groundMaterial);
-
-    // 立方体：一个面一次 draw，材质与点数各不相同（骰子）。
-    const bool cubeTransparent = m_cubeOpacity < 1.0f;
-    if (cubeTransparent)
+    // 不透明先画。
+    for (const DrawItem& item : m_drawItems)
     {
-        // 标准 alpha 混合：透射近似，没有折射。
-        // depth write 保持关闭，但只画正面：深度缓冲此时只有地面的深度，
-        // 背面若也绘制会与正面叠加成鬼影（能"看穿"到立方体底面）。
+        if (item.material.opacity >= 1.0f)
+        {
+            drawItem(item);
+        }
+    }
+
+    // 半透明最后画：按到相机的距离从远到近，单物体时相对顺序不变。
+    std::vector<const DrawItem*> transparent;
+    for (const DrawItem& item : m_drawItems)
+    {
+        if (item.material.opacity < 1.0f)
+        {
+            transparent.push_back(&item);
+        }
+    }
+
+    if (!transparent.empty())
+    {
+        const glm::vec3 cameraPosition = m_camera.position();
+        std::stable_sort(transparent.begin(), transparent.end(),
+                         [&cameraPosition](const DrawItem* lhs, const DrawItem* rhs)
+                         {
+                             const glm::vec3 lhsCenter(lhs->model[3]);
+                             const glm::vec3 rhsCenter(rhs->model[3]);
+                             return glm::distance(cameraPosition, lhsCenter) >
+                                    glm::distance(cameraPosition, rhsCenter);
+                         });
+
+        // 标准 alpha 混合：透射近似，没有折射。深度写关闭，只画正面避免叠影。
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
         glDepthMask(GL_FALSE);
-    }
 
-    for (int face = 0; face < kCubeFaceCount; ++face)
-    {
-        PBRMaterial faceMaterial = m_cubeFaceMaterials[static_cast<size_t>(face)];
-        // 全局不透明度与每个面自己的不透明度相乘。
-        faceMaterial.opacity = std::clamp(faceMaterial.opacity * m_cubeOpacity, 0.0f, 1.0f);
-        const int pipCount = m_pipsEnabled ? m_cubeFacePips[static_cast<size_t>(face)] : 0;
+        for (const DrawItem* item : transparent)
+        {
+            drawItem(*item);
+        }
 
-        m_pbrRenderer.draw(m_cubeMesh,
-                           m_cubeModel,
-                           faceMaterial,
-                           pipCount,
-                           face * kCubeIndicesPerFace,
-                           kCubeIndicesPerFace);
-    }
-
-    if (cubeTransparent)
-    {
         glDepthMask(GL_TRUE);
         glCullFace(GL_FRONT);
         glDisable(GL_CULL_FACE);
         glDisable(GL_BLEND);
     }
+
+    // [速度显示] 所有三维物体绘制后叠加；读取飞机真实三维线速度，m/s 转为 km/h。
+    const float speedKmh=m_helicopter && m_helicopter->flightPhysicsEnabled()
+        ?glm::length(m_helicopter->dynamics().state().velocity)*3.6f:0.0f;
+    m_speedometer.render(m_framebufferWidth,m_framebufferHeight,speedKmh);
 }
 
 // --- 离屏截图 -------------------------------------------------------------
@@ -818,7 +949,10 @@ void Application::onCursorPosition(GLFWwindow* window, double xPosition, double 
         return;
     }
 
-    application->m_camera.processMouseMovement(static_cast<float>(deltaX), static_cast<float>(deltaY));
+    // [第三人称相机] 驾驶只更新观察轨道，不修改 m_pilotHeading 或飞行指令。
+    if(application->m_driving)
+        application->m_chaseCamera.mouseMovement(static_cast<float>(deltaX),static_cast<float>(deltaY));
+    else application->m_camera.processMouseMovement(static_cast<float>(deltaX), static_cast<float>(deltaY));
 }
 
 void Application::onScroll(GLFWwindow* window, double xOffset, double yOffset)
@@ -832,5 +966,7 @@ void Application::onScroll(GLFWwindow* window, double xOffset, double yOffset)
     }
 
     // 滚轮：只累加目标高度，由 Camera::updateElevation() 每帧平滑逼近。
-    application->m_camera.addElevation(static_cast<float>(yOffset) * kWheelElevationStep);
+    // [第三人称相机] 同一个滚轮输入按模式分流：驾驶缩放，自由观察升降。
+    if(application->m_driving) application->m_chaseCamera.zoom(static_cast<float>(yOffset));
+    else application->m_camera.addElevation(static_cast<float>(yOffset) * kWheelElevationStep);
 }

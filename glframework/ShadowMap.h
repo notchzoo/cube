@@ -23,9 +23,6 @@ public:
     /// 恢复场景帧缓冲与视口。framebufferId 通常是 0（窗口），离屏渲染时传自定义 FBO。
     void unbind(GLuint framebufferId, unsigned int framebufferWidth, unsigned int framebufferHeight);
 
-    /// 方向光的虚拟光源相机：正交投影，不赋予灯光物理位置。
-    glm::mat4 lightSpaceMatrix(const glm::vec3& lightDirection) const;
-
     GLuint depthTexture() const { return m_depthTexture; }
     unsigned int size() const { return m_size; }
 

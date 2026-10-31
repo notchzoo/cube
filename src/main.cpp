@@ -14,6 +14,11 @@ struct Options
     float reflectionStrength = 0.55f;
     bool mouseLook = true;
     bool hidden = false;
+    bool aircraftOnly = false;
+    bool drive=false; // [驾驶交互] --drive 只尝试进入；仍受座舱距离限制，需配合 --camera
+    bool rotors = true;
+    float mainRotorAngle=0,tailRotorAngle=0,tailPitch=0,stabilatorAngle=0;
+    float runFor=0;
     bool pips = true;
     bool spin = true;
     float spinAngleDegrees = -1.0f;   // 负数表示"用 Application 的默认角度"
@@ -67,6 +72,22 @@ int main(int argc, char** argv)
         {
             options.hidden = true;
         }
+        else if (std::strcmp(argv[i], "--aircraft-only") == 0)
+        {
+            options.aircraftOnly = true;
+        }
+        else if (std::strcmp(argv[i], "--no-rotors") == 0) options.rotors=false;
+        else if (std::strcmp(argv[i], "--drive") == 0) options.drive=true;
+        else if (std::strcmp(argv[i], "--main-rotor-angle") == 0)
+            readFloatArgument(argc,argv,i,options.mainRotorAngle);
+        else if (std::strcmp(argv[i], "--tail-rotor-angle") == 0)
+            readFloatArgument(argc,argv,i,options.tailRotorAngle);
+        else if (std::strcmp(argv[i], "--tail-pitch") == 0)
+            readFloatArgument(argc,argv,i,options.tailPitch);
+        else if (std::strcmp(argv[i], "--stabilator-angle") == 0)
+            readFloatArgument(argc,argv,i,options.stabilatorAngle);
+        else if (std::strcmp(argv[i], "--run-for") == 0)
+            readFloatArgument(argc,argv,i,options.runFor);
         else if (std::strcmp(argv[i], "--no-pips") == 0)
         {
             options.pips = false;
@@ -133,6 +154,7 @@ int main(int argc, char** argv)
     Application application(1400, 900, "RenderingCube | OpenGL 3.3 PBR");
     // 截图模式不需要窗口：隐藏后仍然正常渲染。
     application.setWindowVisible(!(options.hidden || !options.screenshotPath.empty()));
+    application.setAircraftOnly(options.aircraftOnly);
 
     if (!application.initialize())
     {
@@ -146,6 +168,8 @@ int main(int argc, char** argv)
     application.enableShadows(options.shadows);
     application.setMouseLookEnabled(options.mouseLook);
     application.setPipsEnabled(options.pips);
+    application.setHelicopterRotorsEnabled(options.rotors);
+    application.setHelicopterPose(options.mainRotorAngle,options.tailRotorAngle,options.tailPitch,options.stabilatorAngle);
 
     // 自转：命令行只注入初始配置，运行期由 Application 自己推进（空格切换）。
     application.setCubeSpinEnabled(options.spin);
@@ -183,11 +207,14 @@ int main(int argc, char** argv)
         }
     }
 
+    // [启动入口] 先应用相机位置，再尝试驾驶，确保 --camera 与 G 使用相同的距离检查。
+    if(options.drive) application.setDriving(true);
+    if (options.runFor>0) application.run(options.runFor);
     if (!options.screenshotPath.empty())
     {
         return application.captureFrame(options.screenshotPath, 1400, 900) ? 0 : 1;
     }
 
-    application.run();
+    if (!(options.runFor>0)) application.run();
     return 0;
 }

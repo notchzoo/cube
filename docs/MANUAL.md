@@ -2,7 +2,8 @@
 
 > 一颗会转的骰子放在巨大的地面片上：OpenGL 3.3 Core + GLFW + GLAD + GLM，
 > Cook-Torrance PBR、方向光阴影、程序化天空、距离雾、逐面材质与程序化点数。
-> 代码规模：27 个源文件/着色器、约 2300 行。本文对应工作区 `D:\DSH\cube` 的 **v0.11**（2026-10-31）状态。
+> 本文对应 **v0.12**（2026-10-31）。载具建模、动画与驾驶的补充说明见
+> [飞行说明](AH64D_FLIGHT.md) 和 [载具代码调用索引](VEHICLE_CODE_MAP.md)。
 > 版本变更记录见 `CHANGELOG.md`。
 
 ---
@@ -44,13 +45,22 @@ D:\DSH\cube
 ├─ glframework/            可复用渲染零件（不认识"骰子/地面"这些业务概念）
 │  ├─ Shader.*              GLSL 编译链接、uniform setter、驱动日志
 │  ├─ Camera.*              第一人称相机 + 滚轮指数平滑升降
-│  ├─ ShadowMap.*           深度纹理 + 深度-only FBO + 光源正交矩阵
+│  ├─ ShadowMap.*           深度纹理 + 深度-only FBO（不管光照几何）
 │  ├─ SkyDome.*             程序化天空球（内部复用 Mesh）
 │  ├─ SunSprite.*           可选太阳图层：billboard + 程序化/贴图材质
 │  ├─ geometry/Mesh.*       VAO + position/color/normal VBO + EBO，支持按索引区间绘制
+│  ├─ geometry/MeshBuilder.* 程序化几何累加：盒体/圆柱/放样，绕序按外法线自动纠正
+│  ├─ scene/                 场景层：只产出 DrawItem，不认识渲染器
+│  │  ├─ DrawItem.h          一次绘制的完整描述（几何/变换/材质/点数/索引段/剔除方式）
+│  │  ├─ SceneObject.h       对象接口：appendDrawItems / appendShadowItems / opacity
+│  │  ├─ MeshObject.*        通用"网格 + 一套材质"对象（地面就是它）
+│  │  ├─ DiceObject.*        骰子：单位立方体 + 六面材质 + 点数 + 自转（可共享网格）
+│  │  ├─ HelicopterObject.*  程序化直升机：放样机身 + 尾梁 + 主/尾旋翼 + 滑橇（1380 顶点/460 三角）
+│  │  └─ Scene.*             对象容器：遍历收集、阴影强度近似
 │  └─ lighting/
 │     ├─ DirectionalLight.h 方向 + 辐照度（没有物理位置）
 │     ├─ PBRMaterial.h      材质参数 + clamped() 夹紧
+│     ├─ LightRig.*         灯光设备：方向光 + 光源正交矩阵 + 太阳方向
 │     └─ PBRRenderer.*      PBR Shader 与全部 uniform 命名、逐面/逐点数 draw
 ├─ asset/shader/           运行时按绝对路径加载的 GLSL（不编译进 exe）
 │  ├─ pbr/pbr.vert         世界/对象空间输出 + 法线逆转置
@@ -124,10 +134,13 @@ run()
 | 滚轮升降（帧率无关的平滑） | 滚轮，每格 0.25，指数平滑 k=14 | `Camera::addElevation / updateElevation` |
 | 骰子：每面独立材质 | 默认六色；`setCubeFaceMaterial` 单独改 | `Application` 六面数组 + `PBRRenderer::draw` 索引区间 |
 | 骰子点数 1..6 | 默认开；`--no-pips` 关 | `pbr.frag` 的 `dicePipMask()`（对象空间 3×3 网格 + 位掩码） |
-| 自转 | 默认 0.6 rad/s；空格暂停/继续；`--no-spin`、`--spin-angle <度>` | `Application` 自转状态 + `updateCubeModel` |
+| 自转 | 默认 0.6 rad/s；空格暂停/继续；`--no-spin`、`--spin-angle <度>` | `DiceObject`（角度+速度+轴） |
+| 场景对象化 | 常开 | `Scene` 收集 `DrawItem`，`DiceObject` / `MeshObject` / `HelicopterObject` 只管自己；灯光归 `LightRig` |
+| 程序化直升机 | 默认出现在骰子右侧 | `HelicopterObject` + `MeshBuilder`（启动时生成，无外部模型文件） |
 | Cook-Torrance PBR | 常开 | `pbr.frag`（GGX / Smith-Schlick / Schlick Fresnel / 能量守恒） |
 | 方向光 + 2048² 阴影 | 默认开；`--no-shadow` 关 | `ShadowMap` + `shadowDepth.*` + `pbr.frag` 的 3×3 PCF |
 | 程序化天空 | 常开 | `SkyDome` + `skyDome.*` |
+| 太阳图层（可选） | 默认开；`--sun` / `--sun-texture` 调整 | `SunSprite` + `sun.*`（独立 billboard，位置跟随光方向） |
 | 环境反射近似 | 强度 0.55；`--no-reflection` 关 | `pbr.frag` 复用 `proceduralSky()` + 粗糙度感知 Fresnel |
 | 距离雾 | 常开（密度 0.0022） | `pbr.frag` 末尾，向地平线色混合 |
 | 半透明 | `--transparent` / `--opacity <0..1>` | `Application::renderScene` 透明分支 |
@@ -168,6 +181,9 @@ run()
 | `--no-mouse` | 释放鼠标并忽略视角增量（截图/演示） |
 | `--hidden` | 隐藏窗口（仍正常渲染） |
 | `--screenshot <file.bmp>` | 离屏渲染一帧、写 24 位 BMP 后退出 |
+| `--sun <radiance>` | 太阳亮度（默认 26，越大核心越白） |
+| `--sun-texture <file.bmp>` | 太阳改用 BMP 贴图（约定：亮度当 alpha） |
+| `--camera x y z yaw pitch` | 直接摆放相机（角度制），出图/调试用 |
 
 ---
 
@@ -208,6 +224,16 @@ app.run();
 app.captureFrame("shot.bmp", 1400, 900);
 ```
 
+太阳是独立图层，接口只有四个（详见 §14）：
+
+```cpp
+SunStyle style = app.sunStyle();                  // 取当前参数
+style.radiance = 40.0f;                           // 改亮度/角半径/光芒数…
+app.setSunStyle(style);
+app.setSunTexture("asset/texture/sun_soft.bmp");  // 换成贴图材质
+app.clearSunTexture();                            // 回到程序化材质
+```
+
 材质定义为 `albedo, metallic, roughness, ao, opacity`；`roughness` 由 `PBRMaterial::clamped()` 夹到 `[0.04, 1]`。
 
 ---
@@ -218,19 +244,24 @@ app.captureFrame("shot.bmp", 1400, 900);
 |---|---|---|
 | 骰子高度 | `application/Application.cpp:24` `kCubeCenterHeight` | 底面高度 = 该值 − `kCubeScale`(0.8)。**当前源码为 1.95（底面离地 1.15）**，抬高越多脚下阳光缝隙越宽 |
 | 骰子大小 | `kCubeScale`（`Application.cpp:23`） | 单位立方体 ±1 乘以它；边长 = 2 × 该值 |
-| 自转速度 / 初始角度 | `m_spinSpeed`（`Application.cpp` 成员初始化）/ 构造函数里的 `glm::radians(28.0f)` | 速度单位弧度/秒 |
+| 自转速度 | `DiceObject` 成员 `m_speed`(0.6) / `setSpinSpeed()` | 弧度/秒，可负（反向），夹紧 ±20 |
+| 初始自转角 | `Application.cpp` 的 `kCubeInitialSpinDegrees`(28) | 传给 `DiceObject` 构造 |
+| 自转轴 | `Application.cpp:26` 的 `kCubeSpinAxis`，或运行期 `DiceObject::setSpinAxis()` | 当前工作区是 (1,1,1)（斜轴翻滚）；改 (0,1,0) 即绕竖轴 |
 | 相机初值 | `Application::Application` 里的 `setPosition / setYawPitch` | 默认 (0, 3, 6.6)、yaw −90°、pitch −20° |
 | 移动速度 / 鼠标灵敏度 | `glframework/Camera.h` 的 `m_moveSpeed`(4.0) / `m_mouseSensitivity`(0.1) | — |
 | 滚轮平滑快慢 | `glframework/Camera.cpp:14` `kElevationSmoothing`(14) | 越大越跟手；8 更绵，25 几乎瞬时 |
 | 光照方向/颜色/强度 | `glframework/lighting/DirectionalLight.h` 或 `setLightDirection()` | 方向是"光传播方向" |
 | 阴影分辨率 | `application/Application.cpp:18` `kShadowMapSize`(2048) | 提到 4096 边缘更锐，代价 64MB 显存 |
-| 阴影覆盖范围 | `glframework/ShadowMap.cpp` `kOrthoHalfExtent`(9) | 收得越紧纹素越细；太小会让远处阴影被裁掉 |
+| 阴影覆盖范围 | `glframework/lighting/LightRig.cpp` `kOrthoHalfExtent`(9) | 收得越紧纹素越细；太小会让远处阴影被裁掉 |
 | 阴影深度范围 | 同上 `kDepthNear/Far`(15/21) | 必须罩住光源相机到场景的距离（`kLightCameraDistance`=18） |
 | 阴影偏移 | `pbr.frag` 的 `bias = max(0.0022*(1-NdotL), 0.0006)` | 调大消 acne 但会让影子"缩离"物体 |
 | 天空颜色 | `pbr.frag` **和** `skyDome.frag` 的 `proceduralSky()` | **两处必须逐字一致**，否则背景与物体反射对不上 |
 | 雾浓度 | `pbr.frag` 的 `exp(-distance * 0.0022)` | 只影响地面远处融合 |
 | 点数大小/间距 | `pbr.frag` 的 `pipRadius`(0.15) / `gridOffset`(0.57) | 单位是对象空间 ±1 的面坐标 |
-| 地面反照率/尺寸 | `Application.h` 的 `m_groundMaterial` 初值 / `kGroundHalfExtent`(1200) | 地面 roughness 保持 0.90，避免大块白色高光 |
+| 地面反照率/尺寸 | `Application::createScene()` 里的 `groundMaterial` / `kGroundHalfExtent`(1200) | 地面 roughness 保持 0.90，避免大块白色高光 |
+| 太阳亮度/尺寸/光芒 | `glframework/SunSprite.h` 的 `SunStyle` 默认值 | radiance 26、coreDegrees 1.4°、glowDegrees 20°、rayCount 12、rayStrength 0.55 |
+| 太阳材质 | `application.setSunTexture("asset/texture/*.bmp")` | 亮度当 alpha；仅支持未压缩 24/32 位 BMP |
+| 是否绘制太阳 | `Application::renderScene` 里的 `m_sun.render(...)` 一行 | 删掉这一行即整体移除太阳 |
 | 窗口尺寸/标题 | `src/main.cpp` 的 `Application(1400, 900, ...)` | — |
 
 ---
@@ -240,6 +271,8 @@ app.captureFrame("shot.bmp", 1400, 900);
 - **阴影**：单方向光、无级联；正交框只覆盖 ±9，范围外按全受光。地面不写深度（纯接收者）。
 - **点数**：是画在 albedo 上的图案，没有凹陷、不扰动法线、不投自己的影子。
 - **环境反射**：复用同一份程序化天空 + 粗糙度感知 Fresnel，是近似，不是预滤波 IBL。
+- **太阳**：独立 billboard，没有写进 `proceduralSky()`，所以骰子的环境反射里看不到它；
+  也没有 bloom / 屏幕空间眩光后处理。
 - **半透明**：只有透射，没有折射；不排序，且只画正面一层。
 - **截图**：离屏 FBO 不带 MSAA，所以 `--screenshot` 的锯齿比窗口更明显（内容一致）。
 - **构建**：随项目的 `glfw3.lib` 是 Debug CRT，所有配置统一 `/MDd`，Release 也一样。
@@ -257,6 +290,8 @@ app.captureFrame("shot.bmp", 1400, 900);
 | `--screenshot` 每次结果不同 | 自转在跑：加 `--no-spin`；需要特定姿态再加 `--spin-angle <度>` |
 | 改了天空颜色但背景没变 | 只改了一处：`pbr.frag` 与 `skyDome.frag` 的 `proceduralSky()` 必须同步 |
 | 链接报 LNK2038 RuntimeLibrary | GLFW 是 Debug CRT，必须全配置 `/MDd` |
+| 看不到太阳 | 太阳在光方向的反侧，默认相机背对它；用 `--camera 0 3 6.6 37.1 55.1` 转过去 |
+| `--sun-texture` 没效果 | 只支持未压缩 24/32 位 BMP；看 stderr 的 `[SunSprite]` 日志 |
 | 运行时报 GLFW 错误/黑窗口 | 需要支持 OpenGL 3.3 Core 的驱动；看 stderr 的 `[Shader]` / `[ShadowMap]` 日志 |
 
 ---
@@ -279,6 +314,7 @@ Get-FileHash a.bmp, b.bmp      # 两个 SHA256 应相同
 - 立方体表面无条纹状 acne，地面无过曝白斑。
 - 阴影边缘无明显锯齿，且与立方体底部贴合。
 - 转动相机时天空只旋转、不平移。
+- 太阳与阴影方向一致：改 `setLightDirection()` 后，太阳位置与影子同时变化。
 - `--transparent` 时能透出地面与阴影，阴影随不透明度变浅。
 
 ---

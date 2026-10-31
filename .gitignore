@@ -1,8 +1,19 @@
 /build/
+/build-*/
 /out/
 /.vs/
 *.user
 *.suo
+
+# 本地凭据、环境配置与临时文件
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+__pycache__/
 
 # 截图/临时图像不入库，但示例太阳贴图要保留
 *.bmp

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(RenderingCube VERSION 1.0.0 LANGUAGES C CXX)
+project(RenderingCube VERSION 0.12 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -47,20 +47,46 @@ set(RENDERINGCUBE_SOURCES
     glframework/Shader.cpp
     glframework/Camera.h
     glframework/Camera.cpp
+    glframework/ThirdPersonCamera.h
+    glframework/ThirdPersonCamera.cpp
+    glframework/physics/RigidBodyState.h
+    glframework/physics/FlightControls.h
+    glframework/physics/HelicopterParameters.h
+    glframework/physics/HelicopterDynamics.h
+    glframework/physics/HelicopterDynamics.cpp
     glframework/ShadowMap.h
     glframework/ShadowMap.cpp
     glframework/SkyDome.h
     glframework/SkyDome.cpp
     glframework/SunSprite.h
     glframework/SunSprite.cpp
+    glframework/ui/Speedometer.h
+    glframework/ui/Speedometer.cpp
 
     glframework/geometry/Mesh.h
     glframework/geometry/Mesh.cpp
+    glframework/geometry/MeshBuilder.h
+    glframework/geometry/MeshBuilder.cpp
+    glframework/geometry/AttackHelicopterGeometry.h
+    glframework/geometry/AttackHelicopterGeometry.cpp
 
     glframework/lighting/DirectionalLight.h
     glframework/lighting/PBRMaterial.h
     glframework/lighting/PBRRenderer.h
     glframework/lighting/PBRRenderer.cpp
+    glframework/lighting/LightRig.h
+    glframework/lighting/LightRig.cpp
+
+    glframework/scene/DrawItem.h
+    glframework/scene/SceneObject.h
+    glframework/scene/MeshObject.h
+    glframework/scene/MeshObject.cpp
+    glframework/scene/DiceObject.h
+    glframework/scene/DiceObject.cpp
+    glframework/scene/AttackHelicopterObject.h
+    glframework/scene/AttackHelicopterObject.cpp
+    glframework/scene/Scene.h
+    glframework/scene/Scene.cpp
 
     asset/shader/pbr/pbr.vert
     asset/shader/pbr/pbr.frag
@@ -70,6 +96,8 @@ set(RENDERINGCUBE_SOURCES
     asset/shader/skyDome.frag
     asset/shader/sun.vert
     asset/shader/sun.frag
+    asset/shader/ui/speedometer.vert
+    asset/shader/ui/speedometer.frag
 )
 
 add_executable(RenderingCube ${RENDERINGCUBE_SOURCES})
@@ -83,6 +111,8 @@ target_include_directories(RenderingCube PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/glframework"
     "${CMAKE_CURRENT_SOURCE_DIR}/glframework/geometry"
     "${CMAKE_CURRENT_SOURCE_DIR}/glframework/lighting"
+    "${CMAKE_CURRENT_SOURCE_DIR}/glframework/scene"
+    "${CMAKE_CURRENT_SOURCE_DIR}/glframework/physics"
     "${GLM_ROOT}"
 )
 
@@ -107,4 +137,40 @@ if(MSVC)
     # 随项目提供的 glfw3.lib 用 Debug CRT 构建；主程序若用 /MD 会报
     # LNK2038 RuntimeLibrary 不匹配，因此所有配置统一 /MDd。
     set_property(TARGET glad RenderingCube PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDebugDLL")
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(AttackHelicopterGeometryTest
+        tests/AttackHelicopterGeometryTest.cpp
+        glframework/geometry/AttackHelicopterGeometry.cpp
+        glframework/geometry/MeshBuilder.cpp
+        glframework/geometry/Mesh.cpp
+        glframework/scene/AttackHelicopterObject.cpp
+        glframework/physics/HelicopterDynamics.cpp
+    )
+    target_include_directories(AttackHelicopterGeometryTest PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/glframework/geometry"
+        "${CMAKE_CURRENT_SOURCE_DIR}/glframework/scene"
+        "${CMAKE_CURRENT_SOURCE_DIR}/glframework/lighting" "${GLM_ROOT}")
+    target_include_directories(AttackHelicopterGeometryTest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/glframework/physics")
+    target_link_libraries(AttackHelicopterGeometryTest PRIVATE glad)
+    if(MSVC)
+        target_compile_options(AttackHelicopterGeometryTest PRIVATE /utf-8)
+        set_property(TARGET AttackHelicopterGeometryTest PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDebugDLL")
+    endif()
+    add_test(NAME AttackHelicopterGeometry COMMAND AttackHelicopterGeometryTest)
+    add_executable(HelicopterDynamicsTest
+        tests/HelicopterDynamicsTest.cpp
+        glframework/physics/HelicopterDynamics.cpp
+        glframework/Camera.cpp
+        glframework/ThirdPersonCamera.cpp)
+    target_include_directories(HelicopterDynamicsTest PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/glframework/physics"
+        "${CMAKE_CURRENT_SOURCE_DIR}/glframework" "${GLM_ROOT}")
+    if(MSVC)
+        target_compile_options(HelicopterDynamicsTest PRIVATE /utf-8)
+        set_property(TARGET HelicopterDynamicsTest PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDebugDLL")
+    endif()
+    add_test(NAME HelicopterDynamics COMMAND HelicopterDynamicsTest)
 endif()

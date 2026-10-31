@@ -1,10 +1,12 @@
 # RenderingCube
 
-> **当前版本：v0.11**（2026-10-31）· 变更见 [CHANGELOG.md](CHANGELOG.md) · 完整手册见 [docs/MANUAL.md](docs/MANUAL.md)
+> **当前版本：v0.12**（2026-10-31）· 变更见 [CHANGELOG.md](CHANGELOG.md) · 完整手册见 [docs/MANUAL.md](docs/MANUAL.md)
 
 基于 GLFW + GLAD + GLM 的 OpenGL 3.3 Core 渲染示例：硬边立方体落在超大地面片上，
 Cook-Torrance PBR（GGX / Smith / Schlick Fresnel）、方向光阴影贴图（3x3 PCF）、
 程序化天空球与粗糙度感知的环境反射近似，最后走 Reinhard 色调映射 + Gamma 校正。
+
+v0.12 加入 AH-64D 风格直升机、可动旋翼与尾翼、简化飞行动力学、第三人称驾驶及实时速度面板。
 
 ## 依赖
 
@@ -35,14 +37,23 @@ Debug / RelWithDebInfo / Release 三种配置都能链接（都使用 Debug CRT�
 
 ## 操作
 
+新增功能的调用入口、更新顺序和调参位置见 [载具代码调用索引](docs/VEHICLE_CODE_MAP.md)。
+
+画面右上角显示直升机当前速度，单位 km/h，保留一位小数，包含水平移动和升降速度。
+未启用飞行物理时显示 0.0；驾驶和自由观察模式均可查看。
+
 | 输入 | 行为 |
 | --- | --- |
-| 鼠标 | 视角（yaw / pitch，pitch 限制 ±89°） |
-| W / S | 前后（沿水平前向，抬头不会起飞） |
-| A / D | 左右 |
-| Page Up / Page Down | 世界 Y 升降 |
-| 鼠标滚轮 | 世界 Y 升降（每格 0.25，指数平滑过渡，不再是瞬移） |
-| 空格 | 暂停 / 继续立方体自转（边沿触发，按住不会连续翻转） |
+| G | 靠近座舱后驾驶直升机；驾驶中可随时退出，按住不会反复切换 |
+| 鼠标 | 自由模式转视角；驾驶模式仅控制第三人称观察，不改变飞机朝向 |
+| W / S | 自由相机前后；驾驶时沿飞机自身朝向前进 / 后退 |
+| A / D | 自由相机左右；驾驶时沿机身左 / 右侧移 |
+| Page Up / Page Down | 自由相机升降；驾驶时爬升 / 下降 |
+| 鼠标滚轮 | 自由模式平滑升降；驾驶模式拉近 / 拉远跟随距离 |
+| 空格 / 左 Ctrl | 驾驶时爬升 / 下降；自由模式空格暂停 / 继续骰子自转 |
+| R | 未激活物理时暂停 / 继续旋翼；进入过驾驶后开关发动机，旋翼平滑加减速 |
+| Q / E | 驾驶时转向并调整尾桨变距；静态展示时仅调整尾桨变距 |
+| Z / C | 水平尾翼偏转；驾驶时附带轻微俯仰配平 |
 | Left Shift | 移动加速 |
 | Esc | 退出 |
 
@@ -94,6 +105,14 @@ for (int face = 0; face < Application::kCubeFaceCount; ++face) {
 --roughness <value>      覆盖六面的粗糙度（保留每面颜色）
 --metallic <0..1>        覆盖六面的金属度（保留每面颜色）
 --no-pips                不画骰子点数，只显示每面材质颜色
+--aircraft-only          仅显示飞机和地面，便于近距离检查机头
+--drive                  启动时尝试驾驶，仍需用 --camera 把相机放在座舱附近
+--no-rotors              启动时暂停旋翼，运行中可用 R 继续
+--main-rotor-angle <度>  主旋翼初始相位
+--tail-rotor-angle <度>  尾桨初始相位
+--tail-pitch <度>        尾桨初始变距（夹紧到 ±18°）
+--stabilator-angle <度>  水平尾翼初始偏角（夹紧到 ±20°）
+--run-for <秒>          运行指定时长后退出；配合截图则在运行结束后截图
 --no-spin                启动时不自转（运行中仍可用空格开启）
 --spin-angle <度>        固定自转角度，用于截图逐像素复现
 --no-shadow              关闭阴影 pass
@@ -116,13 +135,22 @@ application/            Application.h/.cpp      窗口、输入、渲染顺序�
 glframework/
   Shader.h/.cpp         源码加载、编译链接、uniform 设置、错误日志
   Camera.h/.cpp         视角与移动（帧时间缩放）
-  ShadowMap.h/.cpp      深度纹理 + 深度-only 帧缓冲 + 光源正交矩阵
+  ShadowMap.h/.cpp      深度纹理 + 深度-only 帧缓冲（不管光照几何）
   SkyDome.h/.cpp        程序化天空球（内视、去平移、深度压到远平面）
   SunSprite.h/.cpp      可选太阳图层（billboard、程序化或 BMP 贴图材质）
   geometry/Mesh.h/.cpp  VAO + position/color/normal 三个 VBO + EBO
+  geometry/MeshBuilder.h/.cpp  程序化几何累加（盒体/圆柱/放样，自动纠正绕序）
+  scene/                场景层：对象只产出 DrawItem，不认识渲染器
+    DrawItem.h          一次绘制：几何 / 变换 / 材质 / 点数 / 索引段
+    SceneObject.h       对象接口（appendDrawItems / appendShadowItems）
+    MeshObject.h/.cpp   通用"网格 + 材质"（地面）
+    DiceObject.h/.cpp   骰子（六面材质 + 点数 + 自转）
+    HelicopterObject.h/.cpp  程序化直升机（放样机身 + 尾翼 + 旋翼 + 滑橇）
+    Scene.h/.cpp        对象容器
   lighting/
     DirectionalLight.h  方向 + 辐照度（没有物理位置）
     PBRMaterial.h       材质参数与夹紧
+    LightRig.h/.cpp     方向光 + 光源正交矩阵 + 太阳方向
     PBRRenderer.h/.cpp  PBR Shader 与全部 uniform 命名
 asset/shader/           pbr / shadowDepth / skyDome / sun 四组着色器
 asset/texture/          sun_soft.bmp（太阳示例材质）
@@ -199,6 +227,68 @@ src/main.cpp            命令行解析 + 少量默认配置
 关闭阴影（`--no-shadow`）用于对比直射光的贡献：
 
 ![关闭阴影](docs/renderingcube-no-shadow.png)
+
+## 图片参考武装直升机（AttackHelicopterGeometry）
+
+`glframework/geometry/AttackHelicopterGeometry.h/.cpp` 提供独立的程序化模型，
+默认放在骰子左侧，原有红色直升机已从场景和构建目标中移除。包含军绿色机体、串列座舱与窗框、
+双发动机、Longbow 雷达、55°/125° 剪刀式尾桨、四挂点短翼、十九管 M261 火箭巢、
+八枚 Hellfire、230 加仑外置副油箱、轮式起落架和 TADS/PNVS 机头传感器等外形。
+这是图片风格的高细分外形近似，支持主/尾旋翼转动、尾桨变距和水平尾翼偏转；
+支持简化刚体飞行动力学与第三人称驾驶；不含写实贴图或透明玻璃。
+
+```cpp
+#include "AttackHelicopterGeometry.h"
+#include "AttackHelicopterObject.h"
+
+// 在 OpenGL 上下文建立后调用；网格随 Scene 在上下文销毁前释放。
+const PBRMaterial material{glm::vec3(1.0f), 0.25f, 0.50f, 1.0f, 1.0f};
+auto& helicopter = scene.add<AttackHelicopterObject>(
+    AttackHelicopterGeometry::createMeshes(), material, model);
+helicopter.update(deltaSeconds); // 每帧一次，在绘制和阴影 pass 之前
+```
+
+局部坐标为 +X 机头、+Y 向上、+Z 右侧；一单位对应约两米，合并几何接口输出 315,330 个顶点、105,110 个三角形。
+`appendTo(MeshBuilder&)` 可在无 OpenGL 上下文时生成 CPU 几何，
+`createMesh()` 则生成并上传网格。颜色使用顶点色，因此材质 albedo 建议设为白色。
+动画默认使用 `createMeshes()`，输出机身、主旋翼、尾桨单叶、水平尾翼四份网格；
+四片尾桨共用同一份叶片网格，每帧通过七个 DrawItem 分别摆放，只更新变换，不重复上传顶点。
+动画状态与部件变换在 `glframework/scene/AttackHelicopterObject.h/.cpp`，
+按键和时间调度在 `application/Application.cpp`。
+详见 [动画实现与文件职责](docs/AH64D_ANIMATION.md)。
+飞行动力学放在 `glframework/physics/`，第三人称相机放在 `glframework/ThirdPersonCamera.*`。
+按 `G` 后启用 120 Hz 固定步长的重力、旋翼升力、阻力、姿态力矩和起落架地面接触；
+松键自动减速并保持悬停，退出驾驶后飞机继续由辅助控制稳定，相机恢复自由移动。
+飞机和摄像头通过惯性及平滑跟随连接，详细控制与模型限制见 [飞行与驾驶说明](docs/AH64D_FLIGHT.md)。
+
+`createMesh(Loadout::Combat)` 使用双火箭巢与八枚导弹，
+`createMesh(Loadout::Ferry)` 使用双副油箱与八枚导弹；默认 `Loadout::Mixed`
+为左内火箭巢、右内副油箱、两侧外挂点各四枚导弹。每个挂点只装一种挂载。
+尺寸依据、挂点表和拟合精度限制见 [AH-64D 参考说明](docs/AH64D_REFERENCE.md)。
+
+曲面平滑通过增加顶点与连续法线实现，仍使用位置/颜色/法线三个 VBO。
+机身、发动机和油箱采用最多 64 段环向细分、原截面间 12 段纵向细分与保形三次插值；
+圆柱侧面使用径向法线，端盖、窗框、翼面保持硬边。
+轮胎和进气口边缘使用环面，并补充风扇、轮毂螺栓、舱盖紧固件、铰链与门把手。
+飞机的阴影 pass 使用闭合体背面深度，消除机身表面的自阴影条纹。
+
+几何验证覆盖三种挂载的顶点、索引、法线、退化三角形，以及圆柱/放样端盖方向、
+曲面解析法线、环面和非均匀缩放后的法线保持：
+`ctest --test-dir build-verify -C Debug --output-on-failure`。
+
+当前验证程序位于 `build-verify/Debug/RenderingCube.exe`（原 `build` 缓存记录了旧路径）。
+
+![武装直升机与现有场景](docs/attack-helicopter-scene.png)
+
+机头按近景参考重做了宽下颌和两侧整流罩、非对称 TADS 圆形/方形模块、独立上置 PNVS、
+转轴与支架、传感器窗口与密封圈，并细化机炮吊架、供弹链、前风挡和雨刷。
+可用以下命令重现近景：
+
+```powershell
+./build-verify/Debug/RenderingCube.exe --aircraft-only --no-mouse --camera -1.05 1.55 0.1 -123 -18
+```
+
+![AH-64D 机头细节](docs/ah64d-nose-quarter.png)
 
 ## 太阳图层（SunSprite）
 
