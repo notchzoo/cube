@@ -18,10 +18,8 @@ public:
 
     /// 上传位置/颜色/法线三组顶点属性与索引。三个数组长度必须一致。
     /// 属性位置固定为 0=position、1=color、2=normal。
-    void upload(const std::vector<glm::vec3>& positions,
-                const std::vector<glm::vec3>& colors,
-                const std::vector<glm::vec3>& normals,
-                const std::vector<unsigned int>& indices);
+    void upload(const std::vector<glm::vec3>& positions, const std::vector<glm::vec3>& colors,
+                const std::vector<glm::vec3>& normals, const std::vector<unsigned int>& indices);
 
     void draw() const;
 

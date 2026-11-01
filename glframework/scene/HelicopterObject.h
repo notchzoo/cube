@@ -21,9 +21,7 @@ public:
     /// 反照率取白色，让顶点色决定成品颜色；金属/粗糙度给"喷漆金属"的观感。
     static PBRMaterial defaultMaterial();
 
-    HelicopterObject(std::shared_ptr<Mesh> mesh,
-                     const PBRMaterial& material,
-                     const glm::mat4& model = glm::mat4(1.0f));
+    HelicopterObject(std::shared_ptr<Mesh> mesh, const PBRMaterial& material, const glm::mat4& model = glm::mat4(1.0f));
 
     void setModelMatrix(const glm::mat4& model) { m_model = model; }
     const glm::mat4& modelMatrix() const { return m_model; }
@@ -42,6 +40,6 @@ public:
 private:
     std::shared_ptr<Mesh> m_mesh;
     PBRMaterial m_material;
-    glm::mat4 m_model{ 1.0f };
+    glm::mat4 m_model{1.0f};
     bool m_castsShadow = true;
 };

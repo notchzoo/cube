@@ -1,9 +1,13 @@
+# 构建产物（CMakePresets 统一输出到 build/）
 /build/
 /build-*/
 /out/
 /.vs/
 *.user
 *.suo
+
+# 本地验证产物（基准截图、像素对比输出）
+/verify_out/
 
 # 本地凭据、环境配置与临时文件
 .env

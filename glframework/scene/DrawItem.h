@@ -22,10 +22,10 @@ struct DrawItem
     };
 
     const Mesh* mesh = nullptr;
-    glm::mat4 model{ 1.0f };
+    glm::mat4 model{1.0f};
     PBRMaterial material;
-    int pipCount = 0;          // 0 = 不画点数（骰子专用，其他物体保持 0）
-    int firstIndex = 0;        // 只画一段索引；indexCount == 0 表示整网格
+    int pipCount = 0;   // 0 = 不画点数（骰子专用，其他物体保持 0）
+    int firstIndex = 0; // 只画一段索引；indexCount == 0 表示整网格
     int indexCount = 0;
     FaceCull shadowCull = FaceCull::Back;
 };

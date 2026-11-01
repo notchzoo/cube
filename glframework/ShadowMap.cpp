@@ -17,15 +17,15 @@ bool ShadowMap::initialize(unsigned int size)
     glGenTextures(1, &m_depthTexture);
 
     glBindTexture(GL_TEXTURE_2D, m_depthTexture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, static_cast<GLsizei>(size), static_cast<GLsizei>(size),
-                 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, static_cast<GLsizei>(size), static_cast<GLsizei>(size), 0,
+                 GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
 
     // 手动做 3x3 比较，采样必须用 NEAREST，否则双线性插值会造出并不存在的中间深度。
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-    const GLfloat whiteBorder[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    const GLfloat whiteBorder[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, whiteBorder);
     glBindTexture(GL_TEXTURE_2D, 0);
 

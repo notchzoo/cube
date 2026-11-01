@@ -68,20 +68,9 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness)
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// Keep numerically identical to proceduralSky() in skyDome.frag: the
-// environment reflection reuses the very same sky function, so a cube
-// reflection always matches the background colors.
-vec3 proceduralSky(vec3 direction)
-{
-    float height = clamp(direction.y, -1.0, 1.0);
-
-    vec3 zenithColor  = vec3(0.07, 0.19, 0.48);
-    vec3 horizonColor = vec3(0.55, 0.66, 0.82);
-    vec3 groundColor  = vec3(0.20, 0.20, 0.22);
-
-    vec3 sky = mix(horizonColor, zenithColor, pow(clamp(height, 0.0, 1.0), 0.55));
-    return mix(groundColor, sky, smoothstep(-0.05, 0.05, height));
-}
+// 程序化天空只有一份实现：asset/shader/common/sky.glsl。
+// 由 Shader 的 #include 预处理展开，环境反射与背景因此永远使用同一个函数。
+#include "../common/sky.glsl"
 
 // Painted dice pips, evaluated in object space. The cube is a unit cube, so a
 // face spans [-1, 1] and a 3x3 grid of pip cells covers 1..6 pips. This is a

@@ -20,8 +20,8 @@ public:
     struct LoftRing
     {
         float x = 0.0f;
-        float halfWidth = 0.1f;    // 局部 Z 半宽
-        float halfHeight = 0.1f;   // 局部 Y 半高
+        float halfWidth = 0.1f;  // 局部 Z 半宽
+        float halfHeight = 0.1f; // 局部 Y 半高
         float yCenter = 0.0f;
     };
 
@@ -29,36 +29,35 @@ public:
     void addCylinder(const glm::mat4& transform, float radius, float height, int segments, const glm::vec3& color);
     void addLoft(const glm::mat4& transform, const std::vector<LoftRing>& rings, int segments, const glm::vec3& color);
     /// [曲面平滑] 圆柱侧面使用径向法线，端盖保持独立平面法线，避免轮缘被错误磨圆。
-    void addSmoothCylinder(const glm::mat4& transform, float radius, float height, int segments, const glm::vec3& color);
+    void addSmoothCylinder(const glm::mat4& transform, float radius, float height, int segments,
+                           const glm::vec3& color);
     /// [曲面平滑] 截面间保形三次插值；segments 控制环向细分，axialSteps 控制相邻截面间细分。
     /// 法线由曲面切向量推导，不是每个三角形单独一条法线。
-    void addSmoothLoft(const glm::mat4& transform, const std::vector<LoftRing>& rings,
-                       int segments, const glm::vec3& color, int axialSteps = 8);
+    void addSmoothLoft(const glm::mat4& transform, const std::vector<LoftRing>& rings, int segments,
+                       const glm::vec3& color, int axialSteps = 8);
     /// [曲面平滑] 环面轴为局部 Y；用于圆润轮胎、轮毂和进气口边缘。
-    void addTorus(const glm::mat4& transform, float majorRadius, float tubeRadius,
-                  int radialSegments, int tubeSegments, const glm::vec3& color);
+    void addTorus(const glm::mat4& transform, float majorRadius, float tubeRadius, int radialSegments, int tubeSegments,
+                  const glm::vec3& color);
     /// 合并另一个 builder，支持正行列式的仿射变换；逆转置传递法线，保留非均匀缩放后的平滑效果。
     void appendTransformed(const MeshBuilder& source, const glm::mat4& transform);
     /// Flat polygon with automatic outward winding; reference must lie inside the object.
-    void addQuad(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec3& d,
-                 const glm::vec3& color, const glm::vec3& outwardCenter)
+    void addQuad(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec3& d, const glm::vec3& color,
+                 const glm::vec3& outwardCenter)
     {
         addQuadOriented(a, b, c, d, color, outwardCenter);
     }
 
     bool empty() const { return m_indices.empty(); }
 
-    void build(std::vector<glm::vec3>& positions,
-               std::vector<glm::vec3>& colors,
-               std::vector<glm::vec3>& normals,
+    void build(std::vector<glm::vec3>& positions, std::vector<glm::vec3>& colors, std::vector<glm::vec3>& normals,
                std::vector<unsigned int>& indices) const;
 
 private:
-    void addSmoothTriangle(glm::vec3 a, glm::vec3 b, glm::vec3 c,
-                           glm::vec3 na, glm::vec3 nb, glm::vec3 nc, const glm::vec3& color);
+    void addSmoothTriangle(glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 na, glm::vec3 nb, glm::vec3 nc,
+                           const glm::vec3& color);
     void addTriangle(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec3& color);
-    void addTriangleOriented(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c,
-                             const glm::vec3& color, const glm::vec3& outwardCenter);
+    void addTriangleOriented(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec3& color,
+                             const glm::vec3& outwardCenter);
     void addQuadOriented(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec3& d,
                          const glm::vec3& color, const glm::vec3& outwardCenter);
 

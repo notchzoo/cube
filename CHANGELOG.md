@@ -1,5 +1,53 @@
 # 版本记录
 
+## v0.12.01 — 2026-11-02
+
+本轮是“工程质量”版本：不新增画面内容，集中修掉性能热点、构建/发布限制与开发期反馈回路。
+
+### P0 渲染正确性与性能
+
+- uniform 位置改为首次查询后缓存（`Shader::uniformLocation`），每帧不再调用上百次
+  `glGetUniformLocation`；Debug 下拼错的名字会打印一次诊断。
+- 着色器加载支持 `#include "相对路径"`（相对当前文件解析、单阶段去重、深度上限 8）。
+  新增 `asset/shader/common/sky.glsl`，`pbr.frag` 与 `skyDome.frag` 改为包含同一份实现，
+  删掉了两处人手同步的 `proceduralSky()`。
+- 离屏截图改为“多重采样 renderbuffer 渲染 + blit 解析”：`--screenshot` 与窗口一致使用 4x MSAA，
+  基准图从此带抗锯齿（输出行也会标注采样数）。
+- 新增 `glframework/GlUtil.h`：move-only 的 Texture/Framebuffer/Renderbuffer 句柄，
+  截图 FBO 与覆盖层缓冲析构即释放；`gl::checkError()` 在 Debug 下把各 pass 的 GL 错误
+  变成带位置的日志行。新增 `tools/compare_screenshot.py` 用于逐像素回归比较。
+
+### P1 开发期反馈与可移植性
+
+- 新增 `glframework/ui/Overlay.*`（即时模式覆盖层），彻底移除 Win32 GDI 速度面板与
+  `Speedometer`：文字在启动时由系统字体一次性栅格化成图集，每帧只做纹理采样；
+  圆角面板用 SDF 抗锯齿；GL 状态由 `GlStateBlock` 一次性保存/恢复。
+- F1 打开调参面板（`--ui` 可在启动时打开）：帧率/帧时间、绘制项与三角形数、
+  阴影、反射强度、不透明度、粗糙度、金属度、点数、自转、光照方位与高度、旋翼。
+  面板可见时释放光标；关闭后恢复原来的鼠标观察状态。
+- 新增 `ShaderWatcher`：每 0.4 秒检查着色器及其 `#include` 依赖的 mtime 并热重载；
+  链接失败保留旧程序，只打印驱动日志。
+- 命令行改为自检式：新增 `--help/-h`、`--version`、`--ui`；未知选项与数字解析失败
+  一律报错并以退出码 2 结束，不再静默使用默认值。
+- 资产目录改为运行期解析（exe 同级 `asset/` 优先，源码树路径兜底），
+  构建后 CMake 会把 `asset/` 复制到输出目录，产物可以整体拷走运行。
+- 工程化：新增 `.clang-format`（Allman + 4 空格 + 120 列）并对全部源码格式化；
+  新增 `CMakePresets.json`（debug/release）、`.github/workflows/build.yml`
+  （configure → build → ctest）、`RENDERINGCUBE_VERSION` 宏；
+  修正 `.gitignore` 的中文注释乱码并新增 `/verify_out/`。
+
+### 验证
+
+- `cmake --preset debug` + `cmake --build --preset debug` + `ctest --preset debug` 全绿。
+- 格式化、uniform 缓存、`#include` 重构三步各自用 `--screenshot` 与基线逐像素对比（0 差异）；
+  MSAA 截图与基线差 0.785% 像素、最大通道差 103，全部位于几何边缘，符合预期。
+- 热重载成功与失败两条路径、`--help/--version/未知参数`、`--drive` 进入驾驶、`--ui` 面板均实测通过。
+
+### 已知遗留
+
+- `third_party/glfw/lib/glfw3.lib` 仍是 Debug CRT 构建，因此所有配置继续使用 `/MDd`；
+  真正可分发的 Release 需要一份同源的 Release CRT 版静态库。
+- `docs/` 里部分旧截图的 HUD 形态仍是旧的速度面板，画面内容（PBR/阴影/载具）未变。
 ## v0.12 — 2026-10-31
 
 本轮包含场景对象化重构、AH-64D 外形建模与细化、部件动画、整机飞行动力学、

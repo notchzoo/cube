@@ -23,7 +23,7 @@
 | 四份部件网格的生成和上传 | `glframework/geometry/AttackHelicopterGeometry.cpp`：`buildParts`、`createMeshes` | `[几何生成]` / `[几何上传]` |
 | 平滑圆柱、放样、轮胎 | `glframework/geometry/MeshBuilder.h/.cpp` | `[曲面平滑]` |
 | 飞行中的阴影视锥跟随 | `glframework/lighting/LightRig.h/.cpp`：`setShadowFocus` | `[阴影跟随]` |
-| 右上角速度显示 | `glframework/ui/Speedometer.h/.cpp`；`Application::renderScene` 最后调用 | `[速度显示]` |
+| 右上角速度与调参面板 | `glframework/ui/Overlay.h/.cpp`；`Application::drawOverlay`（`renderScene` 最后调用） | `[覆盖层]` |
 
 ## 初始化调用链
 
@@ -65,7 +65,11 @@ Application::run
     Scene 输出 DrawItem / ShadowItem
     partTransforms 计算机身和可动部件变换
     阴影 pass -> 主 pass
-    Speedometer::render                 叠加右上角速度，三维物理速度 × 3.6 转 km/h
+    drawOverlay
+      Overlay::beginFrame               清空上一帧图元
+      速度药丸                          三维物理速度 × 3.6 转 km/h（始终显示）
+      调参面板（F1）                    帧率/绘制数 + 阴影/反射/粗糙度/光照/旋翼
+      Overlay::endFrame                 显式状态块内一次性提交并恢复 GL 状态
 ```
 
 物理和动画只在载具 `update` 中推进一次。两个渲染 pass 读取相同姿态，不能分别推进时间。
@@ -94,6 +98,8 @@ Application::run
 
 更详细的使用说明见 [飞行与驾驶](AH64D_FLIGHT.md)、[部件动画](AH64D_ANIMATION.md)、[模型参考](AH64D_REFERENCE.md)。
 
-速度面板的字体、边距和大小位于 `ui/Speedometer.cpp`，配色及圆角位于
-`asset/shader/ui/speedometer.frag`。文字使用 Windows 系统字体，数值变化时更新纹理，
-HUD 在三维场景后绘制并恢复 GL 状态。`loadShaders` 初始化，`releaseResources` 在窗口销毁前释放。
+覆盖层的面板宽度、行高等布局常量在 `ui/Overlay.cpp`（`kLabelWidth`、`m_rowHeight`），
+配色写在 `Application::drawOverlay` 的 `glm::vec4` 字面量里，圆角与字形采样在
+`asset/shader/ui/overlay.frag`。文字由系统字体在首次使用时栅格化进图集，之后每帧只做纹理采样；
+所有图元在 `Overlay::endFrame` 的 `GlStateBlock` 里一次性绘制，状态自动恢复。
+`loadShaders` 初始化，`releaseResources` 在窗口销毁前释放；F1 在 `processInput` 中切换。

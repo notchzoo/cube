@@ -16,10 +16,8 @@ constexpr float kSunDistance = 100.0f;
 
 unsigned int readU32(const std::vector<unsigned char>& data, size_t offset)
 {
-    return static_cast<unsigned int>(data[offset]) |
-           (static_cast<unsigned int>(data[offset + 1]) << 8) |
-           (static_cast<unsigned int>(data[offset + 2]) << 16) |
-           (static_cast<unsigned int>(data[offset + 3]) << 24);
+    return static_cast<unsigned int>(data[offset]) | (static_cast<unsigned int>(data[offset + 1]) << 8) |
+           (static_cast<unsigned int>(data[offset + 2]) << 16) | (static_cast<unsigned int>(data[offset + 3]) << 24);
 }
 
 int readS32(const std::vector<unsigned char>& data, size_t offset)
@@ -29,8 +27,7 @@ int readS32(const std::vector<unsigned char>& data, size_t offset)
 
 unsigned int readU16(const std::vector<unsigned char>& data, size_t offset)
 {
-    return static_cast<unsigned int>(data[offset]) |
-           (static_cast<unsigned int>(data[offset + 1]) << 8);
+    return static_cast<unsigned int>(data[offset]) | (static_cast<unsigned int>(data[offset + 1]) << 8);
 }
 
 /// 最小 BMP 读取：只支持未压缩的 24/32 位 BMP，输出 RGBA8。
@@ -42,8 +39,7 @@ bool loadBmpRgba(const std::string& path, std::vector<unsigned char>& rgba, int&
         return false;
     }
 
-    std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(stream)),
-                                     std::istreambuf_iterator<char>());
+    std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
     if (bytes.size() < 54 || bytes[0] != 'B' || bytes[1] != 'M')
     {
         return false;
@@ -88,9 +84,9 @@ bool loadBmpRgba(const std::string& path, std::vector<unsigned char>& rgba, int&
         unsigned char* target = rgba.data() + static_cast<size_t>(y) * static_cast<size_t>(w) * 4u;
         for (int x = 0; x < w; ++x)
         {
-            target[x * 4 + 0] = source[x * bytesPerPixel + 2];   // B -> R
-            target[x * 4 + 1] = source[x * bytesPerPixel + 1];   // G
-            target[x * 4 + 2] = source[x * bytesPerPixel + 0];   // R -> B
+            target[x * 4 + 0] = source[x * bytesPerPixel + 2]; // B -> R
+            target[x * 4 + 1] = source[x * bytesPerPixel + 1]; // G
+            target[x * 4 + 2] = source[x * bytesPerPixel + 0]; // R -> B
             target[x * 4 + 3] = (bytesPerPixel == 4) ? source[x * bytesPerPixel + 3] : 255;
         }
     }
@@ -108,8 +104,7 @@ SunSprite::~SunSprite()
 
 bool SunSprite::initialize(const std::string& assetDirectory)
 {
-    if (!m_shader.loadFromFiles(assetDirectory + "/shader/sun.vert",
-                                assetDirectory + "/shader/sun.frag"))
+    if (!m_shader.loadFromFiles(assetDirectory + "/shader/sun.vert", assetDirectory + "/shader/sun.frag"))
     {
         return false;
     }
@@ -142,8 +137,7 @@ void SunSprite::createQuad()
 {
     // 两个三角形覆盖 [-1,1]^2，本地坐标直接交给片元着色器当作径向参数。
     const float corners[12] = {
-        -1.0f, -1.0f,   1.0f, -1.0f,   1.0f,  1.0f,
-        -1.0f, -1.0f,   1.0f,  1.0f,  -1.0f,  1.0f,
+        -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f,
     };
 
     glGenVertexArrays(1, &m_vao);
@@ -199,9 +193,7 @@ void SunSprite::clearTexture()
     }
 }
 
-void SunSprite::render(const glm::vec3& cameraPosition,
-                       const glm::mat4& viewMatrix,
-                       const glm::mat4& projectionMatrix,
+void SunSprite::render(const glm::vec3& cameraPosition, const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix,
                        const glm::vec3& sunDirection)
 {
     if (!m_shader.valid() || m_vao == 0)
@@ -237,8 +229,7 @@ void SunSprite::render(const glm::vec3& cameraPosition,
     m_shader.setFloat("uHalfSize", halfSize);
     m_shader.setVec3("uTint", m_style.tint);
     m_shader.setFloat("uRadiance", std::max(m_style.radiance, 0.0f));
-    m_shader.setFloat("uCoreRatio",
-                      std::clamp(m_style.coreDegrees / glowDegrees, 0.01f, 1.0f));
+    m_shader.setFloat("uCoreRatio", std::clamp(m_style.coreDegrees / glowDegrees, 0.01f, 1.0f));
     m_shader.setInt("uRayCount", std::max(m_style.rayCount, 0));
     m_shader.setFloat("uRaySharpness", std::max(m_style.raySharpness, 1.0f));
     m_shader.setFloat("uRayStrength", std::max(m_style.rayStrength, 0.0f));

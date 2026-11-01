@@ -15,9 +15,7 @@ public:
     /// 生成一块水平地面片（法线 +Y，四顶点两三角形）。
     static std::shared_ptr<Mesh> createGroundMesh(float halfExtent);
 
-    MeshObject(std::shared_ptr<Mesh> mesh,
-               const PBRMaterial& material,
-               const glm::mat4& model = glm::mat4(1.0f));
+    MeshObject(std::shared_ptr<Mesh> mesh, const PBRMaterial& material, const glm::mat4& model = glm::mat4(1.0f));
 
     void setMaterial(const PBRMaterial& material) { m_material = material.clamped(); }
     const PBRMaterial& material() const { return m_material; }
@@ -38,7 +36,7 @@ public:
 private:
     std::shared_ptr<Mesh> m_mesh;
     PBRMaterial m_material;
-    glm::mat4 m_model{ 1.0f };
+    glm::mat4 m_model{1.0f};
     bool m_castsShadow = true;
     DrawItem::FaceCull m_shadowCull = DrawItem::FaceCull::Back;
 };

@@ -15,8 +15,7 @@ public:
     Scene(const Scene&) = delete;
     Scene& operator=(const Scene&) = delete;
 
-    template <typename T, typename... Args>
-    T& add(Args&&... args)
+    template <typename T, typename... Args> T& add(Args&&... args)
     {
         auto object = std::make_unique<T>(std::forward<Args>(args)...);
         T& reference = *object;

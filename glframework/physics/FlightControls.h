@@ -9,10 +9,10 @@ namespace flight
 struct FlightControls
 {
     glm::vec3 horizontalVelocity{0}; // 世界坐标目标速度，米/秒；由机体 WASD 方向换算，忽略 Y
-    float climb=0;                   // [-1,1] 升降；0 表示目标垂直速度为零
-    float heading=0;                 // 绕世界 +Y 的目标航向，弧度；只由 Q/E 改变
-    float pedals=0;                  // [-1,1] 尾桨变距及偏航力矩；正值为 +Y 旋转
-    float stabilatorTrim=0;          // [-1,1] 水平尾翼配平及轻微俯仰力矩
-    bool engineOn=true;              // 发动机目标开关，实际转速在物理步中平滑变化
+    float climb = 0;                 // [-1,1] 升降；0 表示目标垂直速度为零
+    float heading = 0;               // 绕世界 +Y 的目标航向，弧度；只由 Q/E 改变
+    float pedals = 0;                // [-1,1] 尾桨变距及偏航力矩；正值为 +Y 旋转
+    float stabilatorTrim = 0;        // [-1,1] 水平尾翼配平及轻微俯仰力矩
+    bool engineOn = true;            // 发动机目标开关，实际转速在物理步中平滑变化
 };
 }

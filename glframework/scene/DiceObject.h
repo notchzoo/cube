@@ -24,10 +24,7 @@ public:
     /// 面顺序固定为 +Z, -Z, +X, -X, +Y, -Y，与材质下标一一对应。
     static std::shared_ptr<Mesh> createCubeMesh();
 
-    DiceObject(std::shared_ptr<Mesh> mesh,
-               float centerHeight,
-               float scale,
-               float initialAngleRadians = 0.0f,
+    DiceObject(std::shared_ptr<Mesh> mesh, float centerHeight, float scale, float initialAngleRadians = 0.0f,
                const glm::vec3& spinAxis = glm::vec3(0.0f, 1.0f, 0.0f));
 
     // --- 材质 -------------------------------------------------------------
@@ -72,7 +69,7 @@ private:
 
     std::shared_ptr<Mesh> m_mesh;
     std::array<PBRMaterial, kFaceCount> m_faces;
-    std::array<int, kFaceCount> m_pips{ 1, 2, 3, 4, 5, 6 };
+    std::array<int, kFaceCount> m_pips{1, 2, 3, 4, 5, 6};
     bool m_pipsEnabled = true;
 
     float m_opacity = 1.0f;
@@ -81,8 +78,8 @@ private:
 
     float m_angle = 0.0f;
     float m_speed = 0.6f;
-    glm::vec3 m_axis{ 0.0f, 1.0f, 0.0f };
+    glm::vec3 m_axis{0.0f, 1.0f, 0.0f};
     bool m_spinEnabled = true;
 
-    glm::mat4 m_model{ 1.0f };
+    glm::mat4 m_model{1.0f};
 };

@@ -1,0 +1,46 @@
+﻿# RenderingCube 代码风格：Allman 大括号、4 空格缩进、指针/引用左贴、120 列。
+# 用法（Windows）：C:/vs2022/VC/Tools/Llvm/x64/bin/clang-format.exe -i <files>
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++17
+
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 120
+
+BreakBeforeBraces: Allman
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+
+PointerAlignment: Left
+ReferenceAlignment: Left
+DerivePointerAlignment: false
+
+NamespaceIndentation: None
+AccessModifierOffset: -4
+IndentAccessModifiers: false
+IndentCaseLabels: false
+FixNamespaceComments: false
+
+# 头文件顺序是人工安排的（windows.h / glad.h 的顺序影响编译），禁止工具重排。
+SortIncludes: Never
+
+ConstructorInitializerIndentWidth: 4
+BreakConstructorInitializers: BeforeColon
+PackConstructorInitializers: Never
+
+AlignAfterOpenBracket: Align
+AlignOperands: AlignAfterOperator
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignTrailingComments: true
+ContinuationIndentWidth: 4
+
+SpaceBeforeParens: ControlStatements
+SpaceAfterCStyleCast: false
+SpacesInAngles: false
+SpacesBeforeTrailingComments: 1

@@ -24,6 +24,10 @@ public:
     /// 必须在所有不透明与半透明几何之前调用。
     void render(const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix) const;
 
+    /// 供热重载与统计读取底层程序。
+    Shader& shader() { return m_shader; }
+    const Shader& shader() const { return m_shader; }
+
 private:
     void createSphere(float radius);
 

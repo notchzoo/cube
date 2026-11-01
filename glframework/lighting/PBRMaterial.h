@@ -7,7 +7,7 @@
 /// 金属度-粗糙度工作流参数。roughness 下限 0.04，避免 GGX 出现无限亮的针状高光。
 struct PBRMaterial
 {
-    glm::vec3 albedo{ 1.0f };
+    glm::vec3 albedo{1.0f};
     float metallic = 0.0f;
     float roughness = 0.28f;
     float ao = 1.0f;

@@ -41,13 +41,13 @@ public:
 private:
     void updateVectors();
 
-    glm::vec3 m_position{ 0.0f, 2.0f, 7.0f };
-    glm::vec3 m_front{ 0.0f, 0.0f, -1.0f };
-    glm::vec3 m_right{ 1.0f, 0.0f, 0.0f };
-    glm::vec3 m_up{ 0.0f, 1.0f, 0.0f };
-    glm::vec3 m_worldUp{ 0.0f, 1.0f, 0.0f };
+    glm::vec3 m_position{0.0f, 2.0f, 7.0f};
+    glm::vec3 m_front{0.0f, 0.0f, -1.0f};
+    glm::vec3 m_right{1.0f, 0.0f, 0.0f};
+    glm::vec3 m_up{0.0f, 1.0f, 0.0f};
+    glm::vec3 m_worldUp{0.0f, 1.0f, 0.0f};
 
-    float m_yaw = -90.0f;    // 角度制对外，内部转弧度
+    float m_yaw = -90.0f; // 角度制对外，内部转弧度
     float m_pitch = -15.0f;
     float m_moveSpeed = 4.0f;
     float m_mouseSensitivity = 0.1f;

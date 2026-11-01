@@ -11,14 +11,14 @@ constexpr float kTwoPi = 6.28318530717958647692f;
 
 std::array<PBRMaterial, DiceObject::kFaceCount> defaultFaceMaterials()
 {
-    return { {
-        { glm::vec3(0.86f, 0.20f, 0.16f), 0.0f, 0.35f, 1.0f, 1.0f },  // +Z 红
-        { glm::vec3(0.20f, 0.62f, 0.30f), 0.0f, 0.55f, 1.0f, 1.0f },  // -Z 绿
-        { glm::vec3(0.18f, 0.38f, 0.84f), 0.0f, 0.22f, 1.0f, 1.0f },  // +X 蓝
-        { glm::vec3(0.93f, 0.70f, 0.18f), 0.0f, 0.45f, 1.0f, 1.0f },  // -X 琥珀
-        { glm::vec3(0.88f, 0.88f, 0.86f), 0.0f, 0.12f, 1.0f, 1.0f },  // +Y 米白
-        { glm::vec3(0.55f, 0.30f, 0.78f), 0.9f, 0.28f, 1.0f, 1.0f },  // -Y 紫色金属
-    } };
+    return {{
+        {glm::vec3(0.86f, 0.20f, 0.16f), 0.0f, 0.35f, 1.0f, 1.0f}, // +Z 红
+        {glm::vec3(0.20f, 0.62f, 0.30f), 0.0f, 0.55f, 1.0f, 1.0f}, // -Z 绿
+        {glm::vec3(0.18f, 0.38f, 0.84f), 0.0f, 0.22f, 1.0f, 1.0f}, // +X 蓝
+        {glm::vec3(0.93f, 0.70f, 0.18f), 0.0f, 0.45f, 1.0f, 1.0f}, // -X 琥珀
+        {glm::vec3(0.88f, 0.88f, 0.86f), 0.0f, 0.12f, 1.0f, 1.0f}, // +Y 米白
+        {glm::vec3(0.55f, 0.30f, 0.78f), 0.9f, 0.28f, 1.0f, 1.0f}, // -Y 紫色金属
+    }};
 }
 }
 
@@ -26,12 +26,8 @@ std::shared_ptr<Mesh> DiceObject::createCubeMesh()
 {
     // 硬边立方体：每个面 4 个独立顶点，法线在面内恒定。
     const glm::vec3 faceNormals[kFaceCount] = {
-        glm::vec3(0.0f, 0.0f, 1.0f),
-        glm::vec3(0.0f, 0.0f, -1.0f),
-        glm::vec3(1.0f, 0.0f, 0.0f),
-        glm::vec3(-1.0f, 0.0f, 0.0f),
-        glm::vec3(0.0f, 1.0f, 0.0f),
-        glm::vec3(0.0f, -1.0f, 0.0f),
+        glm::vec3(0.0f, 0.0f, 1.0f),  glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(1.0f, 0.0f, 0.0f),
+        glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f),  glm::vec3(0.0f, -1.0f, 0.0f),
     };
 
     std::vector<glm::vec3> positions;
@@ -47,8 +43,8 @@ std::shared_ptr<Mesh> DiceObject::createCubeMesh()
     {
         // tangent x bitangent = normal，保证每个面绕序一致（CCW 朝外）。
         const glm::vec3 tangent = (std::abs(normal.y) > 0.9f)
-            ? glm::vec3(1.0f, 0.0f, 0.0f)
-            : glm::normalize(glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), normal));
+                                    ? glm::vec3(1.0f, 0.0f, 0.0f)
+                                    : glm::normalize(glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), normal));
         const glm::vec3 bitangent = glm::cross(normal, tangent);
 
         const unsigned int base = static_cast<unsigned int>(positions.size());
@@ -81,17 +77,14 @@ std::shared_ptr<Mesh> DiceObject::createCubeMesh()
     return mesh;
 }
 
-DiceObject::DiceObject(std::shared_ptr<Mesh> mesh,
-                       float centerHeight,
-                       float scale,
-                       float initialAngleRadians,
+DiceObject::DiceObject(std::shared_ptr<Mesh> mesh, float centerHeight, float scale, float initialAngleRadians,
                        const glm::vec3& spinAxis)
-    : m_mesh(std::move(mesh))
-    , m_faces(defaultFaceMaterials())
-    , m_centerHeight(centerHeight)
-    , m_scale(scale)
-    , m_angle(initialAngleRadians)
-    , m_axis(spinAxis)
+    : m_mesh(std::move(mesh)),
+      m_faces(defaultFaceMaterials()),
+      m_centerHeight(centerHeight),
+      m_scale(scale),
+      m_angle(initialAngleRadians),
+      m_axis(spinAxis)
 {
     wrapAngle();
     rebuildModel();
@@ -227,7 +220,7 @@ void DiceObject::appendShadowItems(std::vector<DrawItem>& items) const
     item.material = m_faces[0];
     item.pipCount = 0;
     item.firstIndex = 0;
-    item.indexCount = 0;      // 整网格
+    item.indexCount = 0; // 整网格
     item.shadowCull = DrawItem::FaceCull::Front;
     items.push_back(item);
 }

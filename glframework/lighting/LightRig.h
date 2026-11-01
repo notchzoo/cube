@@ -28,11 +28,11 @@ public:
     /// 方向光的虚拟光源相机：正交投影。灯光没有物理位置。
     glm::mat4 lightSpaceMatrix() const;
     /// [阴影跟随] Application::updateVehicleCamera 在物理启用后调用，覆盖飞机及其地面投影。
-    void setShadowFocus(glm::vec3 center,float halfExtent);
+    void setShadowFocus(glm::vec3 center, float halfExtent);
 
 private:
     DirectionalLight m_light;
-    glm::vec3 m_focus{0,1,0};
-    float m_halfExtent=9;
-    bool m_tracking=false;
+    glm::vec3 m_focus{0, 1, 0};
+    float m_halfExtent = 9;
+    bool m_tracking = false;
 };

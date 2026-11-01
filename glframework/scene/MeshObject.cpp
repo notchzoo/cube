@@ -13,18 +13,16 @@ std::shared_ptr<Mesh> MeshObject::createGroundMesh(float halfExtent)
     };
     const std::vector<glm::vec3> normals(4, glm::vec3(0.0f, 1.0f, 0.0f));
     const std::vector<glm::vec3> colors(4, glm::vec3(1.0f));
-    const std::vector<unsigned int> indices = { 0, 1, 2, 0, 2, 3 };
+    const std::vector<unsigned int> indices = {0, 1, 2, 0, 2, 3};
 
     mesh->upload(positions, colors, normals, indices);
     return mesh;
 }
 
-MeshObject::MeshObject(std::shared_ptr<Mesh> mesh,
-                       const PBRMaterial& material,
-                       const glm::mat4& model)
-    : m_mesh(std::move(mesh))
-    , m_material(material.clamped())
-    , m_model(model)
+MeshObject::MeshObject(std::shared_ptr<Mesh> mesh, const PBRMaterial& material, const glm::mat4& model)
+    : m_mesh(std::move(mesh)),
+      m_material(material.clamped()),
+      m_model(model)
 {
 }
 
@@ -41,7 +39,7 @@ void MeshObject::appendDrawItems(std::vector<DrawItem>& items) const
     item.material = m_material;
     item.pipCount = 0;
     item.firstIndex = 0;
-    item.indexCount = 0;      // 整网格
+    item.indexCount = 0; // 整网格
     item.shadowCull = m_shadowCull;
     items.push_back(item);
 }

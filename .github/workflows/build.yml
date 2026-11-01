@@ -1,0 +1,31 @@
+﻿name: build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          cmake --version
+          where.exe cl || true
+
+      - name: Configure (Debug)
+        run: cmake --preset debug
+
+      - name: Build (Debug)
+        run: cmake --build --preset debug
+
+      - name: Test (Debug)
+        run: ctest --preset debug
+
+      # 截图回归需要 OpenGL 3.3 Core 上下文；GitHub 托管的 runner 没有 GPU，
+      # 因此像素对比只在有显卡的机器上手工执行：
+      #   ./skills/rendering-cube-pbr/scripts/verify_project.ps1 -Screenshot

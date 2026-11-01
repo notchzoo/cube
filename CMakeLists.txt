@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(RenderingCube VERSION 0.12 LANGUAGES C CXX)
+project(RenderingCube VERSION 0.12.01 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,6 +45,11 @@ set(RENDERINGCUBE_SOURCES
 
     glframework/Shader.h
     glframework/Shader.cpp
+    glframework/AssetPath.h
+    glframework/AssetPath.cpp
+    glframework/GlUtil.h
+    glframework/ShaderWatcher.h
+    glframework/ShaderWatcher.cpp
     glframework/Camera.h
     glframework/Camera.cpp
     glframework/ThirdPersonCamera.h
@@ -60,8 +65,8 @@ set(RENDERINGCUBE_SOURCES
     glframework/SkyDome.cpp
     glframework/SunSprite.h
     glframework/SunSprite.cpp
-    glframework/ui/Speedometer.h
-    glframework/ui/Speedometer.cpp
+    glframework/ui/Overlay.h
+    glframework/ui/Overlay.cpp
 
     glframework/geometry/Mesh.h
     glframework/geometry/Mesh.cpp
@@ -96,8 +101,8 @@ set(RENDERINGCUBE_SOURCES
     asset/shader/skyDome.frag
     asset/shader/sun.vert
     asset/shader/sun.frag
-    asset/shader/ui/speedometer.vert
-    asset/shader/ui/speedometer.frag
+    asset/shader/ui/overlay.vert
+    asset/shader/ui/overlay.frag
 )
 
 add_executable(RenderingCube ${RENDERINGCUBE_SOURCES})
@@ -119,6 +124,16 @@ target_include_directories(RenderingCube PRIVATE
 # Shader 按绝对路径加载，运行目录不影响结果。
 target_compile_definitions(RenderingCube PRIVATE
     RENDERINGCUBE_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/asset"
+    RENDERINGCUBE_VERSION="${PROJECT_VERSION}"
+)
+
+# 把 asset/ 复制到可执行文件旁边：整个输出目录可以拷走直接运行，
+# 运行期优先用 exe 同级 asset/，源码树路径只作为从 IDE 直接运行时的兜底。
+add_custom_command(TARGET RenderingCube POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/asset"
+            "$<TARGET_FILE_DIR:RenderingCube>/asset"
+    COMMENT "Copying asset/ next to the executable"
 )
 
 target_link_libraries(RenderingCube PRIVATE

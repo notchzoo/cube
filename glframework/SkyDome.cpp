@@ -42,7 +42,7 @@ void SkyDome::render(const glm::mat4& viewMatrix, const glm::mat4& projectionMat
     }
 
     // 去掉 View 的平移分量：天空只跟相机朝向走。
-    const glm::mat4 rotationOnlyView{ glm::mat3(viewMatrix) };
+    const glm::mat4 rotationOnlyView{glm::mat3(viewMatrix)};
 
     m_shader.use();
     m_shader.setMat4("uView", rotationOnlyView);
@@ -74,9 +74,7 @@ void SkyDome::createSphere(float radius)
             const float u = static_cast<float>(sector) / static_cast<float>(kSectors);
             const float theta = u * 2.0f * kPi;
 
-            glm::vec3 direction(std::sin(phi) * std::cos(theta),
-                                std::cos(phi),
-                                std::sin(phi) * std::sin(theta));
+            glm::vec3 direction(std::sin(phi) * std::cos(theta), std::cos(phi), std::sin(phi) * std::sin(theta));
             positions.push_back(direction * radius);
             normals.push_back(direction);
             colors.push_back(glm::vec3(1.0f));

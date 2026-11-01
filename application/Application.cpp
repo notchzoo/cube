@@ -1,8 +1,10 @@
 #include "Application.h"
 #include "AttackHelicopterGeometry.h"
 #include "AttackHelicopterObject.h"
+#include "GlUtil.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -20,12 +22,14 @@ namespace
 {
 // --- 场景与相机常量 -------------------------------------------------------
 constexpr int kShadowMapSize = 2048;
+// 离屏截图同样走 MSAA：与窗口里的 4x 抗锯齿一致，基准图才等于“窗内所见”。
+constexpr int kScreenshotSamples = 4;
 constexpr float kCameraFieldOfViewDegrees = 50.0f;
 constexpr float kCameraNearPlane = 0.1f;
 constexpr float kCameraFarPlane = 4000.0f;
 constexpr float kGroundHalfExtent = 1200.0f;
-constexpr float kCubeScale = 0.8f;              // 单位立方体 -> 边长 1.6
-constexpr float kCubeCenterHeight = 1.95f;      // 中心高度；底面 = 该值 - kCubeScale
+constexpr float kCubeScale = 0.8f;               // 单位立方体 -> 边长 1.6
+constexpr float kCubeCenterHeight = 1.95f;       // 中心高度；底面 = 该值 - kCubeScale
 constexpr float kCubeInitialSpinDegrees = 28.0f; // 初始自转角：三个面同时可见
 const glm::vec3 kCubeSpinAxis(1.0f, 1.0f, 1.0f); // 旋转轴（工作区当前值；改回 (0,1,0) 即绕竖轴）
 
@@ -42,8 +46,7 @@ void printGlfwError(int code, const char* description)
 /// 写 24 位 BMP。输入是 glReadPixels 的 RGBA 数据，行序自下而上，正好是 BMP 的行序。
 bool writeBmp24(const std::string& path, int width, int height, const std::vector<unsigned char>& rgbaPixels)
 {
-    if (width <= 0 || height <= 0 ||
-        rgbaPixels.size() < static_cast<size_t>(width) * static_cast<size_t>(height) * 4u)
+    if (width <= 0 || height <= 0 || rgbaPixels.size() < static_cast<size_t>(width) * static_cast<size_t>(height) * 4u)
     {
         return false;
     }
@@ -67,7 +70,7 @@ bool writeBmp24(const std::string& path, int width, int height, const std::vecto
     putU32(14, 40);
     putU32(18, static_cast<unsigned int>(width));
     putU32(22, static_cast<unsigned int>(height));
-    putU32(26, 0x00180001u);   // planes = 1, bits per pixel = 24
+    putU32(26, 0x00180001u); // planes = 1, bits per pixel = 24
     putU32(34, static_cast<unsigned int>(imageSize));
     putU32(38, 2835);
     putU32(42, 2835);
@@ -82,8 +85,7 @@ bool writeBmp24(const std::string& path, int width, int height, const std::vecto
     std::vector<unsigned char> row(static_cast<size_t>(rowBytes), 0);
     for (int y = 0; y < height; ++y)
     {
-        const unsigned char* source =
-            rgbaPixels.data() + static_cast<size_t>(y) * static_cast<size_t>(width) * 4u;
+        const unsigned char* source = rgbaPixels.data() + static_cast<size_t>(y) * static_cast<size_t>(width) * 4u;
         for (int x = 0; x < width; ++x)
         {
             row[static_cast<size_t>(x) * 3u + 0u] = source[static_cast<size_t>(x) * 4u + 2u];
@@ -100,9 +102,9 @@ bool writeBmp24(const std::string& path, int width, int height, const std::vecto
 // --- 生命周期 -------------------------------------------------------------
 
 Application::Application(int width, int height, const char* title)
-    : m_title(title != nullptr ? title : "RenderingCube")
-    , m_windowWidth(width > 0 ? width : 1400)
-    , m_windowHeight(height > 0 ? height : 900)
+    : m_title(title != nullptr ? title : "RenderingCube"),
+      m_windowWidth(width > 0 ? width : 1400),
+      m_windowHeight(height > 0 ? height : 900)
 {
     m_camera.setPosition(glm::vec3(0.0f, 3.0f, 6.6f));
     m_camera.setYawPitch(-90.0f, -20.0f);
@@ -142,7 +144,7 @@ void Application::run(float durationSeconds)
         return;
     }
 
-    const double started=glfwGetTime();
+    const double started = glfwGetTime();
     while (glfwWindowShouldClose(m_window) == GLFW_FALSE)
     {
         const double now = glfwGetTime();
@@ -151,38 +153,49 @@ void Application::run(float durationSeconds)
         // 断点/拖动窗口会让 delta 变得很大，夹紧避免相机瞬移。
         deltaSeconds = std::clamp(deltaSeconds, 0.0f, kMaxFrameDelta);
 
+        // 着色器热重载：内部按 0.4 秒节流检查 mtime，命中才重新编译链接。
+        m_shaderWatcher.poll(now);
+
+        // 覆盖层显示的帧时间做指数平滑，避免数字每帧乱跳。
+        m_smoothedFrameMilliseconds += (deltaSeconds * 1000.0f - m_smoothedFrameMilliseconds) * 0.1f;
+
         // [载具更新] 顺序固定：采集驾驶输入 -> 飞机物理/动画 -> 跟随相机 -> 渲染。
         // 不要在 renderScene 的两个 pass 中推进物理或动画，否则一帧会积分两次。
         processInput(deltaSeconds);
         // 滚轮只累加目标高度，这里每帧平滑逼近，效果和按键一样连续。
-        if(!m_driving) m_camera.updateElevation(deltaSeconds);
+        if (!m_driving)
+            m_camera.updateElevation(deltaSeconds);
 
         // 自转由对象自己推进：暂停时角度保留，恢复从原处继续。
         if (m_dice != nullptr)
         {
             m_dice->update(deltaSeconds);
         }
-        if (m_helicopter != nullptr) m_helicopter->update(deltaSeconds);
+        if (m_helicopter != nullptr)
+            m_helicopter->update(deltaSeconds);
         updateVehicleCamera(deltaSeconds);
 
         renderScene();
 
         glfwSwapBuffers(m_window);
         glfwPollEvents();
-        if (durationSeconds>0 && glfwGetTime()-started>=durationSeconds) break;
+        if (durationSeconds > 0 && glfwGetTime() - started >= durationSeconds)
+            break;
     }
 }
 
 void Application::setHelicopterRotorsEnabled(bool enabled)
 {
-    if (m_helicopter) m_helicopter->setRotorsEnabled(enabled);
+    if (m_helicopter)
+        m_helicopter->setRotorsEnabled(enabled);
 }
 
-void Application::setHelicopterPose(float mainRotor,float tailRotor,float tailPitch,float stabilator)
+void Application::setHelicopterPose(float mainRotor, float tailRotor, float tailPitch, float stabilator)
 {
-    if (!m_helicopter) return;
-    m_helicopter->setRotorAngles(mainRotor,tailRotor);
-    m_helicopter->setControlAngles(tailPitch,stabilator);
+    if (!m_helicopter)
+        return;
+    m_helicopter->setRotorAngles(mainRotor, tailRotor);
+    m_helicopter->setControlAngles(tailPitch, stabilator);
 }
 
 // [驾驶交互] G 与 --drive 共用的唯一切换入口；距离检查必须先于任何驾驶状态修改。
@@ -190,75 +203,87 @@ void Application::setHelicopterPose(float mainRotor,float tailRotor,float tailPi
 // 退出：清空驾驶输入，保留飞机物理状态，让自由相机留在当前观察位置。
 void Application::setDriving(bool enabled)
 {
-    if(!m_helicopter || m_driving==enabled) return;
-    if(enabled && !m_helicopter->canEnterFrom(m_camera.position()))
+    if (!m_helicopter || m_driving == enabled)
+        return;
+    if (enabled && !m_helicopter->canEnterFrom(m_camera.position()))
     {
         updateInteractionPrompt();
-        std::cout<<"[Driving] out of reach; approach the cockpit before pressing G\n";
+        std::cout << "[Driving] out of reach; approach the cockpit before pressing G\n";
         return;
     }
-    m_driving=enabled;
+    m_driving = enabled;
     m_helicopter->clearFlightControls();
-    m_firstMouseEvent=true;m_titleUpdateTime=0;
-    if(enabled)
+    m_firstMouseEvent = true;
+    m_titleUpdateTime = 0;
+    if (enabled)
     {
         m_helicopter->enableFlightPhysics();
-        const auto aircraftForward=m_helicopter->forwardDirection();
-        m_pilotHeading=std::atan2(-aircraftForward.z,aircraftForward.x);
-        m_chaseCamera.enter(m_helicopter->focusPoint(),aircraftForward,m_camera);
-        std::cout<<"[Driving] entered; WASD move, Space/Ctrl climb, Q/E yaw, G exit\n";
+        const auto aircraftForward = m_helicopter->forwardDirection();
+        m_pilotHeading = std::atan2(-aircraftForward.z, aircraftForward.x);
+        m_chaseCamera.enter(m_helicopter->focusPoint(), aircraftForward, m_camera);
+        std::cout << "[Driving] entered; WASD move, Space/Ctrl climb, Q/E yaw, G exit\n";
     }
     else
     {
         // Leave the free camera at its current safe chase-camera position.
         m_camera.setPosition(m_camera.position());
         updateInteractionPrompt();
-        std::cout<<"[Driving] exited; free camera restored\n";
+        std::cout << "[Driving] exited; free camera restored\n";
     }
 }
 
 // [驾驶交互] 自由观察时的标题提示；锚点和距离读取当前飞机 Model，因此会跟随飞机移动。
 void Application::updateInteractionPrompt()
 {
-    if(!m_window || !m_helicopter || m_driving) return;
-    std::string prompt=m_title;
-    if(m_helicopter->canEnterFrom(m_camera.position())) prompt+=" | 按 G 驾驶直升机";
+    if (!m_window || !m_helicopter || m_driving)
+        return;
+    std::string prompt = m_title;
+    if (m_helicopter->canEnterFrom(m_camera.position()))
+        prompt += " | 按 G 驾驶直升机";
     else
     {
-        const float unitsPerMeter=glm::length(glm::vec3(m_helicopter->modelMatrix()[0]))/2;
-        const float metres=glm::distance(m_camera.position(),m_helicopter->interactionPoint())/std::max(.0001f,unitsPerMeter);
-        std::ostringstream distance;distance<<std::fixed<<std::setprecision(1)<<metres;
-        prompt+=" | 靠近座舱后按 G 驾驶 | 距离 "+distance.str()+" m";
+        const float unitsPerMeter = glm::length(glm::vec3(m_helicopter->modelMatrix()[0])) / 2;
+        const float metres =
+            glm::distance(m_camera.position(), m_helicopter->interactionPoint()) / std::max(.0001f, unitsPerMeter);
+        std::ostringstream distance;
+        distance << std::fixed << std::setprecision(1) << metres;
+        prompt += " | 靠近座舱后按 G 驾驶 | 距离 " + distance.str() + " m";
     }
-    glfwSetWindowTitle(m_window,prompt.c_str());
+    glfwSetWindowTitle(m_window, prompt.c_str());
 }
 
 // [第三人称相机] run 在飞机 update 之后调用；此处跟随最新机体位置，并调整阴影覆盖范围。
 // 自由模式只更新交互提示，不把自由相机拉回飞机。
 void Application::updateVehicleCamera(float dt)
 {
-    if(!m_helicopter) return;
-    if(m_helicopter->flightPhysicsEnabled())
+    if (!m_helicopter)
+        return;
+    if (m_helicopter->flightPhysicsEnabled())
     {
-        const auto position=glm::vec3(m_helicopter->modelMatrix()[3]);
-        const auto direction=m_lightRig.normalizedDirection();
-        const auto shadow=position+direction*(position.y/std::max(.15f,-direction.y));
-        m_lightRig.setShadowFocus((position+shadow)*.5f,std::max(9.0f,glm::distance(position,shadow)*.6f+5));
+        const auto position = glm::vec3(m_helicopter->modelMatrix()[3]);
+        const auto direction = m_lightRig.normalizedDirection();
+        const auto shadow = position + direction * (position.y / std::max(.15f, -direction.y));
+        m_lightRig.setShadowFocus((position + shadow) * .5f, std::max(9.0f, glm::distance(position, shadow) * .6f + 5));
     }
-    m_titleUpdateTime-=dt;
-    if(!m_driving)
+    m_titleUpdateTime -= dt;
+    if (!m_driving)
     {
-        if(m_titleUpdateTime<=0) {updateInteractionPrompt();m_titleUpdateTime=.25f;}
+        if (m_titleUpdateTime <= 0)
+        {
+            updateInteractionPrompt();
+            m_titleUpdateTime = .25f;
+        }
         return;
     }
-    m_chaseCamera.update(m_helicopter->focusPoint(),dt,m_camera);
-    if(m_titleUpdateTime<=0)
+    m_chaseCamera.update(m_helicopter->focusPoint(), dt, m_camera);
+    if (m_titleUpdateTime <= 0)
     {
-        const auto& state=m_helicopter->dynamics().state();
-        const std::string title="驾驶 | WASD移动 空格升/Ctrl降 Q/E转向 G退出 | "+
-            std::to_string(static_cast<int>(glm::length(state.velocity)*3.6f))+" km/h | 高度 "+
-            std::to_string(static_cast<int>(state.position.y))+" m";
-        glfwSetWindowTitle(m_window,title.c_str());m_titleUpdateTime=.25f;
+        const auto& state = m_helicopter->dynamics().state();
+        const std::string title = "驾驶 | WASD移动 空格升/Ctrl降 Q/E转向 G退出 | " +
+                                  std::to_string(static_cast<int>(glm::length(state.velocity) * 3.6f)) +
+                                  " km/h | 高度 " + std::to_string(static_cast<int>(state.position.y)) + " m";
+        glfwSetWindowTitle(m_window, title.c_str());
+        m_titleUpdateTime = .25f;
     }
 }
 
@@ -438,6 +463,11 @@ void Application::setMouseLookEnabled(bool enabled)
     glfwSetInputMode(m_window, GLFW_RAW_MOUSE_MOTION, rawMotion);
 }
 
+void Application::setAssetDirectory(const std::string& directory)
+{
+    m_assetDirectory = directory;
+}
+
 void Application::setWindowVisible(bool visible)
 {
     m_windowVisible = visible;
@@ -506,16 +536,16 @@ bool Application::createWindow()
     glDepthFunc(GL_LEQUAL);
     glEnable(GL_MULTISAMPLE);
 
-    std::cout << "[Application] OpenGL " << glGetString(GL_VERSION) << " | renderer: "
-              << glGetString(GL_RENDERER) << '\n';
-    std::cout << "[Application] window " << m_windowWidth << "x" << m_windowHeight
-              << " | framebuffer " << m_framebufferWidth << "x" << m_framebufferHeight << '\n';
+    std::cout << "[Application] OpenGL " << glGetString(GL_VERSION) << " | renderer: " << glGetString(GL_RENDERER)
+              << '\n';
+    std::cout << "[Application] window " << m_windowWidth << "x" << m_windowHeight << " | framebuffer "
+              << m_framebufferWidth << "x" << m_framebufferHeight << '\n';
     return true;
 }
 
 bool Application::loadShaders()
 {
-    const std::string assetDirectory = RENDERINGCUBE_ASSET_DIR;
+    const std::string assetDirectory = m_assetDirectory.empty() ? RENDERINGCUBE_ASSET_DIR : m_assetDirectory;
 
     if (!m_shadowDepthShader.loadFromFiles(assetDirectory + "/shader/shadowDepth.vert",
                                            assetDirectory + "/shader/shadowDepth.frag"))
@@ -534,10 +564,10 @@ bool Application::loadShaders()
     {
         return false;
     }
-    if(!m_speedometer.initialize(assetDirectory))
+    // 覆盖层是可降级图层：着色器或字体后端缺失时只关闭 UI，三维场景照常运行。
+    if (!m_overlay.initialize(assetDirectory))
     {
-        std::cerr<<"[Application] speed display initialization failed\n";
-        return false;
+        std::cerr << "[Application] overlay disabled (shader or font backend missing)\n";
     }
 
     // 太阳是可选图层：它自己的 shader 缺失时只禁用太阳，场景照常运行。
@@ -545,6 +575,14 @@ bool Application::loadShaders()
     {
         std::cerr << "[Application] sun sprite disabled (shader missing)\n";
     }
+
+    // 热重载：监视所有着色器及其 #include 依赖；改 .vert/.frag 后不需要重启进程。
+    m_shaderWatcher.clear();
+    m_shaderWatcher.add(m_pbrRenderer.shader());
+    m_shaderWatcher.add(m_skyDome.shader());
+    m_shaderWatcher.add(m_sun.shader());
+    m_shaderWatcher.add(m_shadowDepthShader);
+    m_shaderWatcher.add(m_overlay.shader());
     return true;
 }
 
@@ -557,7 +595,7 @@ void Application::releaseResources()
 
     // 顺序：先释放 GL 资源（上下文仍有效），再销毁窗口。
     m_sun.reset();
-    m_speedometer.reset();
+    m_overlay.reset();
     m_skyDome.reset();
     m_shadowMap.reset();
     m_shadowDepthShader.reset();
@@ -568,7 +606,7 @@ void Application::releaseResources()
     m_dice = nullptr;
     m_ground = nullptr;
     m_helicopter = nullptr;
-    m_driving=false;
+    m_driving = false;
 
     glfwDestroyWindow(m_window);
     m_window = nullptr;
@@ -581,28 +619,26 @@ void Application::releaseResources()
 void Application::createScene()
 {
     // 地面：纯接收者，不写进阴影贴图（原因见 renderScene 的说明）。
-    const PBRMaterial groundMaterial{ glm::vec3(0.60f, 0.60f, 0.58f), 0.0f, 0.90f, 1.0f, 1.0f };
+    const PBRMaterial groundMaterial{glm::vec3(0.60f, 0.60f, 0.58f), 0.0f, 0.90f, 1.0f, 1.0f};
     m_ground = &m_scene.add<MeshObject>(MeshObject::createGroundMesh(kGroundHalfExtent), groundMaterial);
     m_ground->setCastsShadow(false);
 
     // 骰子：单位立方体 + 六面材质 + 点数 + 自转，全部封装在 DiceObject。
     if (!m_aircraftOnly)
     {
-        m_dice = &m_scene.add<DiceObject>(DiceObject::createCubeMesh(),
-                                      kCubeCenterHeight,
-                                      kCubeScale,
-                                      glm::radians(kCubeInitialSpinDegrees),
-                                      kCubeSpinAxis);
+        m_dice = &m_scene.add<DiceObject>(DiceObject::createCubeMesh(), kCubeCenterHeight, kCubeScale,
+                                          glm::radians(kCubeInitialSpinDegrees), kCubeSpinAxis);
     }
 
     // Reference-inspired attack helicopter; geometry is reusable independently of Scene.
-    const auto attackModel = glm::scale(
-        glm::translate(glm::mat4(1), glm::vec3(-2.8f, 1.0f, -1.4f)) *
-        glm::rotate(glm::mat4(1), glm::radians(-24.0f), glm::vec3(0, 1, 0)), glm::vec3(.50f));
+    const auto attackModel = glm::scale(glm::translate(glm::mat4(1), glm::vec3(-2.8f, 1.0f, -1.4f)) *
+                                            glm::rotate(glm::mat4(1), glm::radians(-24.0f), glm::vec3(0, 1, 0)),
+                                        glm::vec3(.50f));
     const PBRMaterial attackMaterial{glm::vec3(1), .25f, .50f, 1.0f, 1.0f};
     // [载具创建] GL 上下文已建立；生成四份部件网格，再交给 Scene 持有载具对象。
     // 若增加另一种载具，从此处替换/追加几何和 SceneObject，不要在渲染器中添加机型判断。
-    m_helicopter = &m_scene.add<AttackHelicopterObject>(AttackHelicopterGeometry::createMeshes(),attackMaterial,attackModel);
+    m_helicopter =
+        &m_scene.add<AttackHelicopterObject>(AttackHelicopterGeometry::createMeshes(), attackMaterial, attackModel);
     updateInteractionPrompt();
 }
 
@@ -612,12 +648,7 @@ void Application::drawItem(const DrawItem& item)
     {
         return;
     }
-    m_pbrRenderer.draw(*item.mesh,
-                       item.model,
-                       item.material,
-                       item.pipCount,
-                       item.firstIndex,
-                       item.indexCount);
+    m_pbrRenderer.draw(*item.mesh, item.model, item.material, item.pipCount, item.firstIndex, item.indexCount);
 }
 
 // --- 输入 -----------------------------------------------------------------
@@ -637,10 +668,47 @@ void Application::processInput(float deltaSeconds)
         return positiveValue - negativeValue;
     };
 
+    // [覆盖层] F1 切换调参面板；面板可见时释放光标，让鼠标去点控件。
+    const bool uiToggleDown = glfwGetKey(m_window, GLFW_KEY_F1) == GLFW_PRESS;
+    if (uiToggleDown && !m_uiToggleWasDown)
+    {
+        m_uiVisible = !m_uiVisible;
+        if (m_uiVisible)
+        {
+            m_uiReleasedMouse = m_mouseLookEnabled;
+            setMouseLookEnabled(false);
+        }
+        else
+        {
+            setMouseLookEnabled(m_uiReleasedMouse);
+        }
+    }
+    m_uiToggleWasDown = uiToggleDown;
+
+    if (m_uiVisible)
+    {
+        // 光标是窗口坐标，覆盖层用 framebuffer 像素；HiDPI 下两者不同，必须换算。
+        double cursorX = 0.0;
+        double cursorY = 0.0;
+        int windowWidth = 0;
+        int windowHeight = 0;
+        glfwGetCursorPos(m_window, &cursorX, &cursorY);
+        glfwGetWindowSize(m_window, &windowWidth, &windowHeight);
+        const float scaleX = windowWidth > 0 ? static_cast<float>(m_framebufferWidth) / windowWidth : 1.0f;
+        const float scaleY = windowHeight > 0 ? static_cast<float>(m_framebufferHeight) / windowHeight : 1.0f;
+        const bool pressed = glfwGetMouseButton(m_window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        m_overlay.setMouse(static_cast<float>(cursorX) * scaleX, static_cast<float>(cursorY) * scaleY, pressed);
+    }
+    else
+    {
+        m_overlay.setMouse(-10000.0f, -10000.0f, false);
+    }
+
     // [驾驶交互] G 仅在按下边沿触发；离得太远时按住 G 再靠近，也不会自动进入。
-    const bool interactDown=glfwGetKey(m_window,GLFW_KEY_G)==GLFW_PRESS;
-    if(interactDown && !m_interactWasDown) setDriving(!m_driving);
-    m_interactWasDown=interactDown;
+    const bool interactDown = glfwGetKey(m_window, GLFW_KEY_G) == GLFW_PRESS;
+    if (interactDown && !m_interactWasDown)
+        setDriving(!m_driving);
+    m_interactWasDown = interactDown;
 
     float forward = axis(GLFW_KEY_W, GLFW_KEY_S);
     const float right = axis(GLFW_KEY_D, GLFW_KEY_A);
@@ -661,37 +729,42 @@ void Application::processInput(float deltaSeconds)
 
     if (m_helicopter)
     {
-        const bool rotorToggleDown=glfwGetKey(m_window,GLFW_KEY_R)==GLFW_PRESS;
-        if (rotorToggleDown && !m_rotorToggleWasDown) m_helicopter->toggleRotors();
-        m_rotorToggleWasDown=rotorToggleDown;
-        if(m_driving)
+        const bool rotorToggleDown = glfwGetKey(m_window, GLFW_KEY_R) == GLFW_PRESS;
+        if (rotorToggleDown && !m_rotorToggleWasDown)
+            m_helicopter->toggleRotors();
+        m_rotorToggleWasDown = rotorToggleDown;
+        if (m_driving)
         {
             // [驾驶输入] 机头航向只由 Q/E 积分；鼠标只改变观察轨道。
-            const float pedals=axis(GLFW_KEY_E,GLFW_KEY_Q);
+            const float pedals = axis(GLFW_KEY_E, GLFW_KEY_Q);
             // Mouse orbit is free-look only. E turns the nose right, which is
             // negative world-Y yaw for the aircraft's +X forward convention.
-            m_pilotHeading=std::remainder(m_pilotHeading-glm::radians(pedals*70*deltaSeconds),6.28318530718f);
+            m_pilotHeading = std::remainder(m_pilotHeading - glm::radians(pedals * 70 * deltaSeconds), 6.28318530718f);
             flight::FlightControls controls;
-            const float speed=m_helicopter->dynamics().parameters().maxSpeed*
-                (glfwGetKey(m_window,GLFW_KEY_LEFT_SHIFT)==GLFW_PRESS?1.6f:1.0f);
+            const float speed = m_helicopter->dynamics().parameters().maxSpeed *
+                                (glfwGetKey(m_window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ? 1.6f : 1.0f);
             // Movement follows the aircraft's actual heading, not the free-look camera.
-            controls.horizontalVelocity=m_helicopter->movementDirection(axis(GLFW_KEY_W,GLFW_KEY_S),right)*speed;
+            controls.horizontalVelocity = m_helicopter->movementDirection(axis(GLFW_KEY_W, GLFW_KEY_S), right) * speed;
             // [驾驶输入] 升降独立于机头倾角/相机 pitch，避免抬头看就上升。
-            controls.climb=std::clamp(worldUp+(spaceDown?1.0f:0.0f)-
-                (glfwGetKey(m_window,GLFW_KEY_LEFT_CONTROL)==GLFW_PRESS?1.0f:0.0f),-1.0f,1.0f);
-            controls.heading=m_pilotHeading;controls.pedals=-pedals;
-            controls.stabilatorTrim=axis(GLFW_KEY_C,GLFW_KEY_Z);
+            controls.climb = std::clamp(worldUp + (spaceDown ? 1.0f : 0.0f) -
+                                            (glfwGetKey(m_window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ? 1.0f : 0.0f),
+                                        -1.0f, 1.0f);
+            controls.heading = m_pilotHeading;
+            controls.pedals = -pedals;
+            controls.stabilatorTrim = axis(GLFW_KEY_C, GLFW_KEY_Z);
             m_helicopter->setFlightControls(controls);
         }
-        else if(m_helicopter->flightPhysicsEnabled()) m_helicopter->clearFlightControls();
+        else if (m_helicopter->flightPhysicsEnabled())
+            m_helicopter->clearFlightControls();
         else
         {
-            m_helicopter->setPedalInput(axis(GLFW_KEY_E,GLFW_KEY_Q));
-            m_helicopter->setStabilatorInput(axis(GLFW_KEY_C,GLFW_KEY_Z));
+            m_helicopter->setPedalInput(axis(GLFW_KEY_E, GLFW_KEY_Q));
+            m_helicopter->setStabilatorInput(axis(GLFW_KEY_C, GLFW_KEY_Z));
         }
     }
 
-    if(!m_driving) m_camera.moveLocal(forward, right, worldUp, deltaSeconds);
+    if (!m_driving)
+        m_camera.moveLocal(forward, right, worldUp, deltaSeconds);
 }
 
 // --- 渲染 -----------------------------------------------------------------
@@ -700,12 +773,10 @@ void Application::renderScene()
 {
     const glm::mat4 viewMatrix = m_camera.viewMatrix();
     const float aspectRatio = (m_framebufferHeight > 0)
-        ? static_cast<float>(m_framebufferWidth) / static_cast<float>(m_framebufferHeight)
-        : 1.0f;
-    const glm::mat4 projectionMatrix = glm::perspective(glm::radians(kCameraFieldOfViewDegrees),
-                                                        aspectRatio,
-                                                        kCameraNearPlane,
-                                                        kCameraFarPlane);
+                                ? static_cast<float>(m_framebufferWidth) / static_cast<float>(m_framebufferHeight)
+                                : 1.0f;
+    const glm::mat4 projectionMatrix =
+        glm::perspective(glm::radians(kCameraFieldOfViewDegrees), aspectRatio, kCameraNearPlane, kCameraFarPlane);
 
     const glm::mat4 lightSpaceMatrix = m_lightRig.lightSpaceMatrix();
     const bool shadowsActive = m_shadowsEnabled && (m_shadowMap.depthTexture() != 0);
@@ -752,9 +823,9 @@ void Application::renderScene()
             }
         }
 
-        m_shadowMap.unbind(m_sceneFramebuffer,
-                           static_cast<unsigned int>(m_framebufferWidth),
+        m_shadowMap.unbind(m_sceneFramebuffer, static_cast<unsigned int>(m_framebufferWidth),
                            static_cast<unsigned int>(m_framebufferHeight));
+        gl::checkError("renderScene: shadow pass");
     }
 
     // ---- Pass 2: 主 pass ----
@@ -767,14 +838,8 @@ void Application::renderScene()
     // 太阳：位置由灯光方向决定，和阴影同源。
     m_sun.render(m_camera.position(), viewMatrix, projectionMatrix, m_lightRig.sunDirection());
 
-    m_pbrRenderer.beginFrame(viewMatrix,
-                             projectionMatrix,
-                             m_camera.position(),
-                             m_lightRig.light(),
-                             lightSpaceMatrix,
-                             shadowsActive ? m_shadowMap.depthTexture() : 0,
-                             shadowsActive,
-                             m_reflectionStrength,
+    m_pbrRenderer.beginFrame(viewMatrix, projectionMatrix, m_camera.position(), m_lightRig.light(), lightSpaceMatrix,
+                             shadowsActive ? m_shadowMap.depthTexture() : 0, shadowsActive, m_reflectionStrength,
                              // 投射者不透明度决定阴影深度；多个投射者取最不透明者。
                              m_scene.shadowCasterOpacity());
 
@@ -805,8 +870,7 @@ void Application::renderScene()
                          {
                              const glm::vec3 lhsCenter(lhs->model[3]);
                              const glm::vec3 rhsCenter(rhs->model[3]);
-                             return glm::distance(cameraPosition, lhsCenter) >
-                                    glm::distance(cameraPosition, rhsCenter);
+                             return glm::distance(cameraPosition, lhsCenter) > glm::distance(cameraPosition, rhsCenter);
                          });
 
         // 标准 alpha 混合：透射近似，没有折射。深度写关闭，只画正面避免叠影。
@@ -827,10 +891,9 @@ void Application::renderScene()
         glDisable(GL_BLEND);
     }
 
-    // [速度显示] 所有三维物体绘制后叠加；读取飞机真实三维线速度，m/s 转为 km/h。
-    const float speedKmh=m_helicopter && m_helicopter->flightPhysicsEnabled()
-        ?glm::length(m_helicopter->dynamics().state().velocity)*3.6f:0.0f;
-    m_speedometer.render(m_framebufferWidth,m_framebufferHeight,speedKmh);
+    // [覆盖层] 所有三维物体绘制后叠加：速度药丸 + 可选调参面板。
+    drawOverlay();
+    gl::checkError("renderScene: main pass");
 }
 
 // --- 离屏截图 -------------------------------------------------------------
@@ -842,33 +905,61 @@ bool Application::captureFrame(const std::string& path, int width, int height)
         return false;
     }
 
-    GLuint framebuffer = 0;
-    GLuint colorTexture = 0;
-    GLuint depthBuffer = 0;
-    glGenFramebuffers(1, &framebuffer);
-    glGenTextures(1, &colorTexture);
-    glGenRenderbuffers(1, &depthBuffer);
+    // 先渲染到多重采样帧缓冲，再 blit 到单采样纹理读取像素。
+    // 否则 --screenshot 出来的图没有 MSAA，与窗口里 4x 抗锯齿的观感不一致；
+    // 用多重采样 renderbuffer 而不是纹理，是因为 GL 3.3 不能用纹理做 MSAA 附件。
+    GLint maxSamples = 0;
+    glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+    const GLsizei samples =
+        static_cast<GLsizei>(std::max(1, std::min(kScreenshotSamples, static_cast<int>(maxSamples))));
 
-    glBindTexture(GL_TEXTURE_2D, colorTexture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    gl::Framebuffer multisampleFramebuffer{ gl::FramebufferDeleter{} };
+    gl::Renderbuffer multisampleColor{ gl::RenderbufferDeleter{} };
+    gl::Renderbuffer multisampleDepth{ gl::RenderbufferDeleter{} };
+    gl::Framebuffer resolveFramebuffer{ gl::FramebufferDeleter{} };
+    gl::Texture resolveColor{ gl::TextureDeleter{} };
 
-    glBindRenderbuffer(GL_RENDERBUFFER, depthBuffer);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+    glGenFramebuffers(1, multisampleFramebuffer.address());
+    glGenRenderbuffers(1, multisampleColor.address());
+    glGenRenderbuffers(1, multisampleDepth.address());
+    glGenFramebuffers(1, resolveFramebuffer.address());
+    glGenTextures(1, resolveColor.address());
+
+    glBindRenderbuffer(GL_RENDERBUFFER, multisampleColor.id());
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_RGBA8, width, height);
+    glBindRenderbuffer(GL_RENDERBUFFER, multisampleDepth.id());
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH_COMPONENT24, width, height);
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTexture, 0);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthBuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, multisampleFramebuffer.id());
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, multisampleColor.id());
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, multisampleDepth.id());
 
     bool success = (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
     if (!success)
     {
-        std::cerr << "[Application] offscreen framebuffer is incomplete\n";
+        std::cerr << "[Application] multisampled offscreen framebuffer is incomplete\n";
     }
-    else
+
+    if (success)
+    {
+        glBindTexture(GL_TEXTURE_2D, resolveColor.id());
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, resolveFramebuffer.id());
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, resolveColor.id(), 0);
+
+        success = (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+        if (!success)
+        {
+            std::cerr << "[Application] resolve framebuffer is incomplete\n";
+        }
+    }
+
+    if (success)
     {
         // renderScene() 只依赖 m_framebufferWidth/Height 与 m_sceneFramebuffer，因此临时改写即可。
         const int savedWidth = m_framebufferWidth;
@@ -876,15 +967,26 @@ bool Application::captureFrame(const std::string& path, int width, int height)
         const GLuint savedFramebuffer = m_sceneFramebuffer;
         m_framebufferWidth = width;
         m_framebufferHeight = height;
-        m_sceneFramebuffer = framebuffer;
+        m_sceneFramebuffer = multisampleFramebuffer.id();
 
+        // 必须显式绑定：关闭阴影时 renderScene 不会走阴影 pass 的 unbind，
+        // 否则会一直画在解析用的单采样 FBO 上，随后被空的多重采样内容覆盖。
+        glBindFramebuffer(GL_FRAMEBUFFER, m_sceneFramebuffer);
         glViewport(0, 0, width, height);
         renderScene();
+        gl::checkError("captureFrame: renderScene");
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampleFramebuffer.id());
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolveFramebuffer.id());
+        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        gl::checkError("captureFrame: resolve blit");
 
         std::vector<unsigned char> pixels(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, resolveFramebuffer.id());
         glReadBuffer(GL_COLOR_ATTACHMENT0);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
         glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        gl::checkError("captureFrame: readPixels");
 
         m_framebufferWidth = savedWidth;
         m_framebufferHeight = savedHeight;
@@ -897,15 +999,14 @@ bool Application::captureFrame(const std::string& path, int width, int height)
         }
         else
         {
-            std::cout << "[Application] wrote " << path << " (" << width << "x" << height << ")\n";
+            std::cout << "[Application] wrote " << path << " (" << width << "x" << height << ", " << samples
+                      << "x MSAA)\n";
         }
     }
 
+    // 句柄在离开作用域时自动删除，这里只把默认帧缓冲和视口还原。
     glBindFramebuffer(GL_FRAMEBUFFER, m_sceneFramebuffer);
     glViewport(0, 0, m_framebufferWidth, m_framebufferHeight);
-    glDeleteRenderbuffers(1, &depthBuffer);
-    glDeleteTextures(1, &colorTexture);
-    glDeleteFramebuffers(1, &framebuffer);
     return success;
 }
 
@@ -950,9 +1051,10 @@ void Application::onCursorPosition(GLFWwindow* window, double xPosition, double 
     }
 
     // [第三人称相机] 驾驶只更新观察轨道，不修改 m_pilotHeading 或飞行指令。
-    if(application->m_driving)
-        application->m_chaseCamera.mouseMovement(static_cast<float>(deltaX),static_cast<float>(deltaY));
-    else application->m_camera.processMouseMovement(static_cast<float>(deltaX), static_cast<float>(deltaY));
+    if (application->m_driving)
+        application->m_chaseCamera.mouseMovement(static_cast<float>(deltaX), static_cast<float>(deltaY));
+    else
+        application->m_camera.processMouseMovement(static_cast<float>(deltaX), static_cast<float>(deltaY));
 }
 
 void Application::onScroll(GLFWwindow* window, double xOffset, double yOffset)
@@ -967,6 +1069,170 @@ void Application::onScroll(GLFWwindow* window, double xOffset, double yOffset)
 
     // 滚轮：只累加目标高度，由 Camera::updateElevation() 每帧平滑逼近。
     // [第三人称相机] 同一个滚轮输入按模式分流：驾驶缩放，自由观察升降。
-    if(application->m_driving) application->m_chaseCamera.zoom(static_cast<float>(yOffset));
-    else application->m_camera.addElevation(static_cast<float>(yOffset) * kWheelElevationStep);
+    if (application->m_driving)
+        application->m_chaseCamera.zoom(static_cast<float>(yOffset));
+    else
+        application->m_camera.addElevation(static_cast<float>(yOffset) * kWheelElevationStep);
+}
+
+
+// --- 覆盖层 ---------------------------------------------------------------
+
+void Application::setLightAngles(float azimuthDegrees, float elevationDegrees)
+{
+    m_lightAzimuthDegrees = azimuthDegrees;
+    m_lightElevationDegrees = elevationDegrees;
+
+    const float azimuth = glm::radians(azimuthDegrees);
+    const float elevation = glm::radians(elevationDegrees);
+    const glm::vec3 sunDirection(std::cos(elevation) * std::cos(azimuth), std::sin(elevation),
+                                 std::cos(elevation) * std::sin(azimuth));
+    // LightRig 的方向是“光的传播方向”，所以太阳方向要取反。
+    m_lightRig.setDirection(-sunDirection);
+}
+
+void Application::drawOverlay()
+{
+    if (!m_overlay.shader().valid() || m_framebufferWidth <= 0 || m_framebufferHeight <= 0)
+    {
+        return;
+    }
+
+    m_overlay.beginFrame(m_framebufferWidth, m_framebufferHeight);
+
+    // 速度药丸：始终显示，不参与鼠标交互。
+    const float speedKmh = m_helicopter && m_helicopter->flightPhysicsEnabled()
+                             ? glm::length(m_helicopter->dynamics().state().velocity) * 3.6f
+                             : 0.0f;
+    char speedText[64] = {};
+    std::snprintf(speedText, sizeof(speedText), "速度 %.1f km/h", speedKmh);
+    const float pillScale = 1.2f;
+    const glm::vec2 pillSize(m_overlay.textWidth(speedText, pillScale) + 28.0f,
+                             m_overlay.lineHeight() * pillScale + 16.0f);
+    const glm::vec2 pillPosition(static_cast<float>(m_framebufferWidth) - pillSize.x - 24.0f, 24.0f);
+    m_overlay.fillRect(pillPosition, pillSize, glm::vec4(0.05f, 0.06f, 0.09f, 0.80f), 10.0f);
+    m_overlay.text(pillPosition + glm::vec2(14.0f, 8.0f), speedText, glm::vec4(0.70f, 0.93f, 1.0f, 1.0f), pillScale);
+
+    if (!m_uiVisible)
+    {
+        m_overlay.text(glm::vec2(24.0f, static_cast<float>(m_framebufferHeight) - m_overlay.lineHeight() - 18.0f),
+                       "F1 调参面板", glm::vec4(1.0f, 1.0f, 1.0f, 0.40f), 1.0f);
+        m_overlay.endFrame();
+        return;
+    }
+
+    // 行数固定，先按行数算高度，保证面板底色正好包住内容。
+    constexpr int kPanelRows = 17;
+    const float headerHeight = 10.0f + m_overlay.lineHeight() * 1.1f + 12.0f;
+    const float panelWidth = 320.0f;
+    const float panelHeight = headerHeight + static_cast<float>(kPanelRows) * m_overlay.rowHeight() + 16.0f;
+    m_overlay.beginPanel(glm::vec2(24.0f, 24.0f), panelWidth, panelHeight, "调试面板");
+
+    char buffer[128] = {};
+    const float frameMilliseconds = std::max(0.01f, m_smoothedFrameMilliseconds);
+    std::snprintf(buffer, sizeof(buffer), "%.1f FPS · %.2f ms", 1000.0f / frameMilliseconds, frameMilliseconds);
+    m_overlay.valueRow("帧率", buffer);
+
+    int triangles = 0;
+    for (const DrawItem& item : m_drawItems)
+    {
+        if (item.mesh != nullptr)
+        {
+            const int count = item.indexCount > 0 ? item.indexCount : static_cast<int>(item.mesh->indexCount());
+            triangles += count / 3;
+        }
+    }
+    std::snprintf(buffer, sizeof(buffer), "%d 项 · %d 三角形", static_cast<int>(m_drawItems.size()), triangles);
+    m_overlay.valueRow("绘制", buffer);
+
+    m_overlay.section("画面");
+    bool shadows = m_shadowsEnabled;
+    if (m_overlay.checkboxRow("阴影", shadows))
+    {
+        enableShadows(shadows);
+    }
+
+    float reflection = m_reflectionStrength;
+    if (m_overlay.sliderRow("反射强度", reflection, 0.0f, 1.0f, "%.2f"))
+    {
+        setReflectionStrength(reflection);
+    }
+
+    float opacity = objectOpacity();
+    if (m_overlay.sliderRow("不透明度", opacity, 0.05f, 1.0f, "%.2f"))
+    {
+        setObjectOpacity(opacity);
+    }
+
+    const PBRMaterial firstFace = cubeFaceMaterial(0);
+    float roughness = firstFace.roughness;
+    if (m_overlay.sliderRow("粗糙度", roughness, 0.04f, 1.0f, "%.2f"))
+    {
+        for (int face = 0; face < kCubeFaceCount; ++face)
+        {
+            PBRMaterial material = cubeFaceMaterial(face);
+            material.roughness = roughness;
+            setCubeFaceMaterial(face, material);
+        }
+    }
+
+    float metallic = firstFace.metallic;
+    if (m_overlay.sliderRow("金属度", metallic, 0.0f, 1.0f, "%.2f"))
+    {
+        for (int face = 0; face < kCubeFaceCount; ++face)
+        {
+            PBRMaterial material = cubeFaceMaterial(face);
+            material.metallic = metallic;
+            setCubeFaceMaterial(face, material);
+        }
+    }
+
+    bool pips = pipsEnabled();
+    if (m_overlay.checkboxRow("骰子点数", pips))
+    {
+        setPipsEnabled(pips);
+    }
+
+    bool spin = cubeSpinEnabled();
+    if (m_overlay.checkboxRow("自转", spin) && spin != cubeSpinEnabled())
+    {
+        toggleCubeSpin();
+    }
+
+    m_overlay.section("光照");
+    float azimuth = m_lightAzimuthDegrees;
+    if (m_overlay.sliderRow("方位", azimuth, -180.0f, 180.0f, "%.0f°"))
+    {
+        setLightAngles(azimuth, m_lightElevationDegrees);
+    }
+    float elevation = m_lightElevationDegrees;
+    if (m_overlay.sliderRow("高度", elevation, -10.0f, 89.0f, "%.0f°"))
+    {
+        setLightAngles(m_lightAzimuthDegrees, elevation);
+    }
+
+    m_overlay.section("载具");
+    bool rotors = m_rotorsEnabled;
+    if (m_overlay.checkboxRow("旋翼", rotors))
+    {
+        m_rotorsEnabled = rotors;
+        setHelicopterRotorsEnabled(rotors);
+    }
+
+    char speedLine[64] = {};
+    std::snprintf(speedLine, sizeof(speedLine), "%.1f km/h", speedKmh);
+    m_overlay.valueRow("速度", speedLine);
+    m_overlay.valueRow("驾驶", m_driving ? "已进入（G 退出）" : "G 靠近后进入");
+
+    m_overlay.endPanel();
+    m_overlay.endFrame();
+}
+void Application::setOverlayPanelVisible(bool visible)
+{
+    m_uiVisible = visible;
+    if (visible && m_window != nullptr)
+    {
+        m_uiReleasedMouse = m_mouseLookEnabled;
+        setMouseLookEnabled(false);
+    }
 }

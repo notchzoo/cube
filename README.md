@@ -1,6 +1,6 @@
 # RenderingCube
 
-> **当前版本：v0.12**（2026-10-31）· 变更见 [CHANGELOG.md](CHANGELOG.md) · 完整手册见 [docs/MANUAL.md](docs/MANUAL.md)
+> **当前版本：v0.12.01**（2026-11-02）· 变更见 [CHANGELOG.md](CHANGELOG.md) · 完整手册见 [docs/MANUAL.md](docs/MANUAL.md)
 
 基于 GLFW + GLAD + GLM 的 OpenGL 3.3 Core 渲染示例：硬边立方体落在超大地面片上，
 Cook-Torrance PBR（GGX / Smith / Schlick Fresnel）、方向光阴影贴图（3x3 PCF）、
@@ -24,16 +24,26 @@ v0.12 加入 AH-64D 风格直升机、可动旋翼与尾翼、简化飞行动力
 ## 构建与运行
 
 ```powershell
-# 技能自带的验证脚本（配置 + 干净构建）
+# 技能自带的验证脚本（配置 + 干净构建 + ctest，可选截图回归）
 ./skills/rendering-cube-pbr/scripts/verify_project.ps1 -ProjectRoot .
+./skills/rendering-cube-pbr/scripts/verify_project.ps1 -ProjectRoot . -Screenshot
 
-# 等价的手工命令
-& 'C:/Program Files/CMake/bin/cmake.exe' -S . -B build -G 'Visual Studio 17 2022' -A x64
-& 'C:/Program Files/CMake/bin/cmake.exe' --build build --config Debug
+# 等价的手工命令（CMakePresets 固定了生成器与输出目录）
+cmake --preset debug
+cmake --build --preset debug
+ctest --preset debug
 ./build/Debug/RenderingCube.exe
 ```
 
 Debug / RelWithDebInfo / Release 三种配置都能链接（都使用 Debug CRT，见上）。
+构建结束后 `asset/` 会被复制到可执行文件旁边，输出目录可以整体拷走直接运行。
+
+快照与帮助：
+
+```text
+RenderingCube --help      # 全部开关（未知参数会报错并以退出码 2 结束）
+RenderingCube --version   # 版本号来自 CMake 的 project(VERSION)
+```
 
 ## 操作
 
@@ -119,10 +129,13 @@ for (int face = 0; face < Application::kCubeFaceCount; ++face) {
 --no-reflection          关闭环境反射
 --no-mouse               释放鼠标并忽略视角输入
 --hidden                 隐藏窗口（仍可渲染）
---screenshot <file.bmp>  离屏渲染一帧并写 24 位 BMP 后退出
+--screenshot <file.bmp>  离屏渲染一帧（4x MSAA，与窗口一致）并写 24 位 BMP 后退出
+--ui                     启动时就打开调参面板（F1 切换）
+--help / -h              显示全部开关
+--version                显示版本
 ```
 
-`--screenshot` 不需要可见窗口，渲染结果逐像素可复现，适合做回归对比：
+`--screenshot` 不需要可见窗口，渲染结果逐像素可复现（含 4x MSAA），适合做回归对比：
 
 ```powershell
 ./build/Debug/RenderingCube.exe --screenshot shot.bmp
@@ -133,11 +146,15 @@ for (int face = 0; face < Application::kCubeFaceCount; ++face) {
 ```text
 application/            Application.h/.cpp      窗口、输入、渲染顺序、配置接口
 glframework/
-  Shader.h/.cpp         源码加载、编译链接、uniform 设置、错误日志
+  Shader.h/.cpp         源码加载、#include 预处理、编译链接、uniform 缓存、错误日志
+  ShaderWatcher.h/.cpp  热重载：按 mtime 监视全部着色器及其 #include 依赖
+  AssetPath.h/.cpp      资产目录解析（exe 同级 asset/ 优先，源码树路径兜底）
+  GlUtil.h              move-only GL 句柄 + Debug 下的 glGetError 断言
   Camera.h/.cpp         视角与移动（帧时间缩放）
   ShadowMap.h/.cpp      深度纹理 + 深度-only 帧缓冲（不管光照几何）
   SkyDome.h/.cpp        程序化天空球（内视、去平移、深度压到远平面）
   SunSprite.h/.cpp      可选太阳图层（billboard、程序化或 BMP 贴图材质）
+  ui/Overlay.h/.cpp     即时模式覆盖层：文字、圆角面板、滑杆/开关（取代旧的 GDI 速度面板）
   geometry/Mesh.h/.cpp  VAO + position/color/normal 三个 VBO + EBO
   geometry/MeshBuilder.h/.cpp  程序化几何累加（盒体/圆柱/放样，自动纠正绕序）
   scene/                场景层：对象只产出 DrawItem，不认识渲染器
@@ -152,9 +169,10 @@ glframework/
     PBRMaterial.h       材质参数与夹紧
     LightRig.h/.cpp     方向光 + 光源正交矩阵 + 太阳方向
     PBRRenderer.h/.cpp  PBR Shader 与全部 uniform 命名
-asset/shader/           pbr / shadowDepth / skyDome / sun 四组着色器
+asset/shader/           pbr / shadowDepth / skyDome / sun / ui 着色器
+  common/sky.glsl       程序化天空的唯一实现，被 pbr.frag 与 skyDome.frag 共同 #include
 asset/texture/          sun_soft.bmp（太阳示例材质）
-src/main.cpp            命令行解析 + 少量默认配置
+src/main.cpp            命令行解析（未知参数报错）+ 少量默认配置
 ```
 
 ## 渲染顺序
@@ -164,7 +182,9 @@ src/main.cpp            命令行解析 + 少量默认配置
    绑定阴影帧缓冲 -> 地面写深度 -> 立方体只画背面写深度 -> 恢复场景帧缓冲与视口
 2. 主 pass
    清颜色/深度 -> 天空球（深度写关闭）-> 地面（不透明 PBR）-> 立方体六面各一次 draw
-   （opacity < 1 时最后、alpha 混合）
+   （opacity < 1 时最后、alpha 混合）-> 太阳
+3. 覆盖层
+   三维绘制结束后一次性提交：速度药丸 + （F1）调参面板；用显式状态块保存/恢复 GL 状态
 ```
 
 ## 实现要点
@@ -196,6 +216,18 @@ src/main.cpp            命令行解析 + 少量默认配置
 - 环境反射直接复用同一 `proceduralSky()`，配合粗糙度感知 Fresnel。这是近似，
   不是预滤波 IBL；没有 HDR 环境贴图和镜面预过滤。
 - 地面距离雾让 1200 单位的地面片自然过渡到地平线颜色，避免出现可见的接缝。
+- uniform 位置在首次 `set*` 时查询一次并缓存（`Shader::uniformLocation`），之后只走名字查找；
+  Debug 下名字拼错会打印一次 `uniform ... not found`，不再静默失效。
+- 着色器支持 `#include "相对路径"`：`common/sky.glsl` 是程序化天空的唯一实现，
+  `pbr.frag`（环境反射/雾）与 `skyDome.frag`（背景）包含同一份，反射与天空不可能再漂移。
+- 离屏截图先渲染到多重采样 renderbuffer，再 blit 到单采样纹理读取，因此 `--screenshot`
+  与窗口的 4x MSAA 观感一致（此前截图是硬边缘的）。
+- 临时 GL 资源（截图 FBO、覆盖层缓冲）走 `GlUtil.h` 的 move-only 句柄，析构即删除；
+  `GlStateBlock` 一次性保存/恢复覆盖层用到的状态，不再靠逐项手工 restore。
+- 改 `.vert/.frag` 后无需重启：`ShaderWatcher` 每 0.4 秒 stat 一次依赖文件，
+  链接成功才替换程序，写错时保留旧程序并只打印驱动日志。
+- 覆盖层是自带的即时模式层（无第三方 UI 库）：文字由系统字体一次性栅格化成图集，
+  每帧只做纹理采样；圆角面板用 SDF 抗锯齿，不依赖 MSAA。
 
 ## 已知近似
 
@@ -204,6 +236,9 @@ src/main.cpp            命令行解析 + 少量默认配置
 - 半透明立方体的地面阴影按投射者不透明度缩放（0.62 时约 38% 的直射光被遮挡），不透明度为 0 时阴影一同消失。
 - 没有级联阴影，正交投影只覆盖场景中心约 18x18 单位（±9）；范围外按全受光处理。
 - 光源是单方向光，没有点光/聚光和环境探针。
+- 覆盖层的文字栅格化使用 Windows 系统字体（GDI 只在启动时把字形画进图集）；
+  其它平台会退化为不显示文字，三维渲染与截图不受影响。
+- 调参面板改动的是运行期状态，不写回代码或命令行；重启即恢复默认。
 
 ## 验证清单
 
@@ -215,6 +250,10 @@ src/main.cpp            命令行解析 + 少量默认配置
 - 阴影随光方向移动，边缘没有明显锯齿。
 - 转动相机时天空只旋转不平移。
 - `--transparent` 时背景能从立方体透出，地面阴影仍可见。
+- `--help` 列出全部开关；拼错的参数（例如 `--no-shdow`）以退出码 2 失败，不再静默忽略。
+- `--ui` 打开面板后拖动滑杆，画面立即响应；F1 关闭后光标回到鼠标观察模式。
+- 运行中修改 `asset/shader/pbr/pbr.frag`，控制台出现 `[Shader] reloaded:` 且画面更新；
+  把着色器改坏时打印编译错误但画面保持上一版。
 
 ## 截图
 
@@ -227,6 +266,10 @@ src/main.cpp            命令行解析 + 少量默认配置
 关闭阴影（`--no-shadow`）用于对比直射光的贡献：
 
 ![关闭阴影](docs/renderingcube-no-shadow.png)
+
+F1 调参面板（`--ui` 启动即打开，覆盖层替代了旧的速度面板）：
+
+![调试面板](docs/renderingcube-overlay.png)
 
 ## 图片参考武装直升机（AttackHelicopterGeometry）
 

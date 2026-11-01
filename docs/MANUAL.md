@@ -43,7 +43,10 @@ D:\DSH\cube
 │  ├─ Application.h         对外契约：全部 setter/getter + 私有状态声明
 │  └─ Application.cpp       实现：GLFW 生命周期、双 pass 渲染、离屏截图、BMP 写盘
 ├─ glframework/            可复用渲染零件（不认识"骰子/地面"这些业务概念）
-│  ├─ Shader.*              GLSL 编译链接、uniform setter、驱动日志
+│  ├─ Shader.*              GLSL 编译链接（含 #include 预处理）、uniform 缓存、驱动日志
+│  ├─ ShaderWatcher.*       着色器热重载：监视依赖文件的 mtime
+│  ├─ AssetPath.*           资产目录解析（exe 同级优先）
+│  ├─ GlUtil.h              move-only GL 句柄 + Debug 下的 GL 错误断言
 │  ├─ Camera.*              第一人称相机 + 滚轮指数平滑升降
 │  ├─ ShadowMap.*           深度纹理 + 深度-only FBO（不管光照几何）
 │  ├─ SkyDome.*             程序化天空球（内部复用 Mesh）
@@ -68,6 +71,8 @@ D:\DSH\cube
 │  ├─ shadowDepth.vert/.frag  深度 pass（无颜色附件）
 │  ├─ skyDome.vert/.frag   去平移的天空球，xyww 压远平面
 │  ├─ sun.vert/.frag       太阳 billboard：日盘 + 光晕 + 放射光芒
+│  ├─ common/sky.glsl      程序化天空的唯一实现（pbr.frag 与 skyDome.frag 共用）
+│  └─ ui/overlay.vert/.frag  覆盖层：SDF 圆角矩形 + 字形图集采样
 ├─ asset/texture/           运行期贴图（sun_soft.bmp 为太阳示例材质）
 ├─ src/main.cpp            命令行解析 → 调 Application 接口；本身不持有状态
 ├─ third_party/            用户提供的依赖，版本不替换
@@ -76,7 +81,7 @@ D:\DSH\cube
 │  └─ glm/                 header-only 数学库
 ├─ docs/                   截图、接触处特写、本说明书
 ├─ skills/rendering-cube-pbr/  本项目遵循的技能包（含修好的构建校验脚本）
-├─ CMakeLists.txt          构建定义（依赖校验、/utf-8、/MDd、绝对资源路径）
+├─ CMakeLists.txt          构建定义（依赖校验、/utf-8、/MDd、构建后复制 asset/）
 ├─ README.md               项目说明（偏"给人看"）
 ├─ CHANGELOG.md            版本变更记录（当前 v0.11）
 ├─ .gitignore / .gitattributes
@@ -184,6 +189,9 @@ run()
 | `--sun <radiance>` | 太阳亮度（默认 26，越大核心越白） |
 | `--sun-texture <file.bmp>` | 太阳改用 BMP 贴图（约定：亮度当 alpha） |
 | `--camera x y z yaw pitch` | 直接摆放相机（角度制），出图/调试用 |
+| `--ui` | 启动时就打开调参面板（运行中 F1 切换） |
+| `--help` / `-h` | 显示全部开关 |
+| `--version` | 显示版本（来自 CMake 的 project VERSION） |
 
 ---
 
@@ -274,7 +282,11 @@ app.clearSunTexture();                            // 回到程序化材质
 - **太阳**：独立 billboard，没有写进 `proceduralSky()`，所以骰子的环境反射里看不到它；
   也没有 bloom / 屏幕空间眩光后处理。
 - **半透明**：只有透射，没有折射；不排序，且只画正面一层。
-- **截图**：离屏 FBO 不带 MSAA，所以 `--screenshot` 的锯齿比窗口更明显（内容一致）。
+- **截图**：离屏路径使用多重采样 renderbuffer + blit 解析，因此 `--screenshot` 与窗口一致带 4x MSAA；
+  基准图带抗锯齿，和肉眼所见相同。
+- **覆盖层**：F1 调参面板与速度药丸是项目自带的即时模式层，不依赖第三方 UI 库；
+  文字在 Windows 上由系统字体一次性栅格化成图集，其它平台退化为不显示文字。
+- **热重载**：运行中修改 `asset/shader/**` 会自动重新编译链接；写错时保留上一版程序。
 - **构建**：随项目的 `glfw3.lib` 是 Debug CRT，所有配置统一 `/MDd`，Release 也一样。
 
 ---

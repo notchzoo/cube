@@ -44,15 +44,10 @@ void PBRRenderer::reset()
     m_shader.reset();
 }
 
-void PBRRenderer::beginFrame(const glm::mat4& viewMatrix,
-                             const glm::mat4& projectionMatrix,
-                             const glm::vec3& cameraPosition,
-                             const DirectionalLight& light,
-                             const glm::mat4& lightSpaceMatrix,
-                             GLuint shadowDepthTexture,
-                             bool shadowsEnabled,
-                             float reflectionStrength,
-                             float shadowStrength)
+void PBRRenderer::beginFrame(const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix,
+                             const glm::vec3& cameraPosition, const DirectionalLight& light,
+                             const glm::mat4& lightSpaceMatrix, GLuint shadowDepthTexture, bool shadowsEnabled,
+                             float reflectionStrength, float shadowStrength)
 {
     if (!m_shader.valid())
     {
@@ -82,12 +77,8 @@ void PBRRenderer::beginFrame(const glm::mat4& viewMatrix,
     }
 }
 
-void PBRRenderer::draw(const Mesh& mesh,
-                       const glm::mat4& modelMatrix,
-                       const PBRMaterial& material,
-                       int pipCount,
-                       int firstIndex,
-                       int indexCount)
+void PBRRenderer::draw(const Mesh& mesh, const glm::mat4& modelMatrix, const PBRMaterial& material, int pipCount,
+                       int firstIndex, int indexCount)
 {
     if (!m_shader.valid() || !mesh.valid())
     {

@@ -17,10 +17,7 @@ public:
     virtual void appendDrawItems(std::vector<DrawItem>& items) const = 0;
 
     /// 深度 pass：默认与主 pass 相同，单面接收者之类可以返回空。
-    virtual void appendShadowItems(std::vector<DrawItem>& items) const
-    {
-        appendDrawItems(items);
-    }
+    virtual void appendShadowItems(std::vector<DrawItem>& items) const { appendDrawItems(items); }
 
     /// 是否参与阴影投射（决定它是否写深度、以及阴影强度的近似取值）。
     virtual bool castsShadow() const { return true; }

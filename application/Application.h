@@ -14,10 +14,11 @@
 #include "PBRRenderer.h"
 #include "Scene.h"
 #include "Shader.h"
+#include "ShaderWatcher.h"
 #include "ShadowMap.h"
 #include "SkyDome.h"
 #include "SunSprite.h"
-#include "ui/Speedometer.h"
+#include "ui/Overlay.h"
 
 struct GLFWwindow;
 class AttackHelicopterObject;
@@ -41,7 +42,7 @@ public:
     bool initialize();
 
     /// 阻塞式主循环，直到窗口被关闭。
-    void run(float durationSeconds=0.0f);
+    void run(float durationSeconds = 0.0f);
 
     // --- 场景配置：必须在 initialize() 之后调用（对象在那时创建）------------
     void setDirectionalLight(const DirectionalLight& light);
@@ -94,13 +95,20 @@ public:
     /// 关闭后释放鼠标并忽略视角增量；便于截图核对或演示。
     void setMouseLookEnabled(bool enabled);
 
+    /// 资产目录（内含 shader/、texture/）。必须在 initialize() 之前调用；
+    /// 不设置时退回编译期记录的项目内路径。
+    void setAssetDirectory(const std::string& directory);
+
+    /// initialize() 之后调用：启动时就打开调参面板（配合 --ui / 截图用）。
+    void setOverlayPanelVisible(bool visible);
+
     /// 必须在 initialize() 之前调用；隐藏窗口时仍可正常渲染。
     void setWindowVisible(bool visible);
     /// Before initialize(): omit the dice for unobstructed aircraft close-up inspection.
     void setAircraftOnly(bool enabled) { m_aircraftOnly = enabled; }
     void setHelicopterRotorsEnabled(bool enabled);
     /// Deterministic articulation pose, in degrees; also useful for screenshots.
-    void setHelicopterPose(float mainRotor,float tailRotor,float tailPitch,float stabilator);
+    void setHelicopterPose(float mainRotor, float tailRotor, float tailPitch, float stabilator);
     /// [驾驶交互] G/启动参数共用入口；进入需要座舱距离检查，退出不受距离限制。
     void setDriving(bool enabled);
     bool driving() const { return m_driving; }
@@ -127,6 +135,8 @@ private:
     void releaseResources();
     void updateVehicleCamera(float deltaSeconds); // 飞机更新后调用，跟随相机和阴影
     void updateInteractionPrompt();               // 自由模式显示靠近距离/按 G 提示
+    void drawOverlay();                           // 速度药丸 + 调参面板（所有三维绘制之后）
+    void setLightAngles(float azimuthDegrees, float elevationDegrees);
 
     /// 按一个 DrawItem 设置材质并绘制；主体与阴影 pass 都不认识具体对象类型。
     void drawItem(const DrawItem& item);
@@ -137,6 +147,7 @@ private:
 
     GLFWwindow* m_window = nullptr;
     std::string m_title;
+    std::string m_assetDirectory;
     int m_windowWidth = 1400;
     int m_windowHeight = 900;
     int m_framebufferWidth = 0;
@@ -156,8 +167,16 @@ private:
     ShadowMap m_shadowMap;
     SkyDome m_skyDome;
     SunSprite m_sun;
-    Speedometer m_speedometer; // [速度显示] 屏幕右上角，独立于三维场景和相机模式
+    Overlay m_overlay; // [覆盖层] 速度显示 + 调参面板（替代旧的 Win32 GDI 速度面板）
+    bool m_uiVisible = false;        // F1 切换面板；可见时释放光标给面板交互
+    bool m_uiReleasedMouse = false;  // 打开面板前的鼠标捕获状态，关闭时恢复
+    bool m_uiToggleWasDown = false;
+    bool m_rotorsEnabled = true;     // 面板里切换旋翼时同步到载具对象
+    float m_smoothedFrameMilliseconds = 16.0f;
+    float m_lightAzimuthDegrees = 37.4f;   // 与默认光向 (-0.55, -1, -0.42) 对应的太阳方位
+    float m_lightElevationDegrees = 57.2f; // 同上，太阳高度角
     Shader m_shadowDepthShader;
+    ShaderWatcher m_shaderWatcher; // [热重载] 监视全部着色器及其 #include 依赖
 
     // 每帧复用的绘制项缓冲，避免逐帧分配。
     std::vector<DrawItem> m_drawItems;
@@ -170,9 +189,9 @@ private:
     bool m_aircraftOnly = false;
     bool m_spaceWasDown = false;
     bool m_rotorToggleWasDown = false;
-    bool m_driving=false,m_interactWasDown=false; // 驾驶状态 / G 上一帧是否按住
-    float m_pilotHeading=0; // 飞机目标航向，弧度；与鼠标观察角度独立
-    float m_titleUpdateTime=0; // 窗口标题刷新倒计时，避免每帧调用系统接口
+    bool m_driving = false, m_interactWasDown = false; // 驾驶状态 / G 上一帧是否按住
+    float m_pilotHeading = 0;                          // 飞机目标航向，弧度；与鼠标观察角度独立
+    float m_titleUpdateTime = 0;                       // 窗口标题刷新倒计时，避免每帧调用系统接口
 
     // 当前场景渲染目标：窗口时为 0，离屏截图时指向临时 FBO。
     GLuint m_sceneFramebuffer = 0;
