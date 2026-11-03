@@ -12,6 +12,13 @@ Mesh::~Mesh()
 void Mesh::upload(const std::vector<glm::vec3>& positions, const std::vector<glm::vec3>& colors,
                   const std::vector<glm::vec3>& normals, const std::vector<unsigned int>& indices)
 {
+    upload(positions, colors, normals, {}, indices);
+}
+
+void Mesh::upload(const std::vector<glm::vec3>& positions, const std::vector<glm::vec3>& colors,
+                  const std::vector<glm::vec3>& normals, const std::vector<glm::vec2>& uvs,
+                  const std::vector<unsigned int>& indices)
+{
     if (positions.size() != colors.size() || positions.size() != normals.size() || positions.empty())
     {
         std::cerr << "[Mesh] attribute arrays mismatch or empty, upload skipped\n";
@@ -41,6 +48,21 @@ void Mesh::upload(const std::vector<glm::vec3>& positions, const std::vector<glm
     uploadAttribute(m_positionVbo, 0, positions);
     uploadAttribute(m_colorVbo, 1, colors);
     uploadAttribute(m_normalVbo, 2, normals);
+
+    std::vector<glm::vec2> zeroUvs;
+    const std::vector<glm::vec2>* uvData = &uvs;
+    if (uvs.size() != positions.size())
+    {
+        zeroUvs.assign(positions.size(), glm::vec2(0.0f));
+        uvData = &zeroUvs;
+    }
+
+    glGenBuffers(1, &m_uvVbo);
+    glBindBuffer(GL_ARRAY_BUFFER, m_uvVbo);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(uvData->size() * sizeof(glm::vec2)), uvData->data(),
+                 GL_STATIC_DRAW);
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), nullptr);
 
     glGenBuffers(1, &m_ebo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ebo);
@@ -102,6 +124,11 @@ void Mesh::reset()
     {
         glDeleteBuffers(1, &m_normalVbo);
         m_normalVbo = 0;
+    }
+    if (m_uvVbo != 0)
+    {
+        glDeleteBuffers(1, &m_uvVbo);
+        m_uvVbo = 0;
     }
     if (m_vao != 0)
     {

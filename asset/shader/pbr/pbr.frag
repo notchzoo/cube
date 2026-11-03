@@ -7,6 +7,7 @@ in vec3 vWorldNormal;
 in vec3 vColor;
 in vec3 vLocalPosition;
 in vec3 vLocalNormal;
+in vec2 vUV;
 
 out vec4 fragColor;
 
@@ -32,6 +33,15 @@ uniform float uShadowStrength;
 
 // Dice pips painted on the current face: 0 = plain surface, 1..6 = pip count.
 uniform int uPipCount;
+// 0 = regular material, 1 = fallback camouflage, 2 = Su-57 054 material regions.
+uniform int uMaterialMode;
+
+// 顶部/腹部 livery 贴图；没有贴图时退回成程序化迷彩。
+uniform sampler2D uAlbedoTop;
+uniform sampler2D uAlbedoBottom;
+uniform int uUseAlbedoMap;
+uniform sampler2D uAlbedoSide;
+uniform int uUseAlbedoSide;
 
 float distributionGGX(vec3 N, vec3 H, float roughness)
 {
@@ -165,6 +175,64 @@ float shadowVisibility(vec3 N, vec3 L)
     return visibility / 9.0;
 }
 
+float hash21(vec2 p)
+{
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+// Five-point star SDF (Inigo Quilez), used for the red wing stars.
+float sdStar5(vec2 p, float r, float rf)
+{
+    vec2 k1 = vec2(0.809016994375, -0.587785252292);
+    vec2 k2 = vec2(-k1.x, k1.y);
+    p.x = abs(p.x);
+    p -= 2.0 * max(dot(k1, p), 0.0) * k1;
+    p -= 2.0 * max(dot(k2, p), 0.0) * k2;
+    p.x = abs(p.x);
+    p.y -= r;
+    vec2 ba = rf * vec2(-k1.y, k1.x) - vec2(0.0, 1.0);
+    float h = clamp(dot(p, ba) / dot(ba, ba), 0.0, r);
+    return length(p - ba * h) * sign(p.y * ba.x - p.x * ba.y);
+}
+
+// Procedural Su-57 digital camo, painted in model space so it needs no UVs.
+// Underside is light with dark blue pixels; upper side is dark with light pixels.
+vec3 jetDigitalCamo(vec3 local, vec3 normal)
+{
+    vec2 uv = local.xz;
+    // 侧面和上表面走深色蓝灰；只有腹部（y 低）翻成浅色。
+    float top = smoothstep(0.0, 0.04, local.y);
+
+    vec3 topBase = vec3(0.055, 0.085, 0.115);
+    vec3 bottomBase = vec3(0.80, 0.84, 0.85);
+    vec3 base = mix(bottomBase, topBase, top);
+
+    vec2 cell = floor(uv / 0.040);
+    vec3 topPatch = mix(vec3(0.62, 0.69, 0.72), vec3(0.86, 0.89, 0.90), hash21(cell + 11.0));
+    vec3 bottomPatch = mix(vec3(0.14, 0.20, 0.25), vec3(0.25, 0.34, 0.40), hash21(cell + 23.0));
+    vec3 patch = mix(bottomPatch, topPatch, top);
+    float patchMask = step(0.66, hash21(cell));
+    vec3 color = mix(base, patch, patchMask);
+
+    float fine = hash21(floor(uv / 0.013));
+    color *= 0.92 + 0.16 * fine;
+
+    float nose = smoothstep(-0.30, -0.62, local.x);
+    color = mix(color, vec3(0.86, 0.88, 0.88), nose * 0.75);
+
+    if (abs(normal.y) > 0.55)
+    {
+        vec2 starPosition = vec2(local.x - 0.12, abs(local.z) - 0.30);
+        float star = sdStar5(starPosition, 0.045, 0.45);
+        color = mix(color, vec3(0.62, 0.08, 0.09), step(star, 0.0));
+    }
+    return color;
+}
+
+#include "../common/su57.glsl"
+
 void main()
 {
     // Vertex color tints the material albedo, which keeps the Mesh color
@@ -172,6 +240,14 @@ void main()
     vec3 albedo = uAlbedo * vColor;
     float metallic = uMetallic;
     float roughness = uRoughness;
+    if (uMaterialMode == 2)
+    {
+        su57Material(vLocalPosition, normalize(vLocalNormal), vUV, albedo, metallic, roughness);
+    }
+    else if (uMaterialMode == 1)
+    {
+        albedo = jetDigitalCamo(vLocalPosition, normalize(vLocalNormal));
+    }
 
     vec3 N = normalize(vWorldNormal);
     vec3 V = normalize(uCameraPosition - vWorldPosition);
@@ -223,6 +299,11 @@ void main()
                                uReflectionStrength * uAo;
 
     vec3 color = direct + ambientDiffuse + environmentSpecular;
+    // Broad sky/ground bounce on the aircraft: the analytic sky has no diffuse
+    // convolution, and otherwise turns the reference's pale belly almost black.
+    if (uMaterialMode == 2)
+        color += albedo * uAo * mix(0.36, 0.18, metallic);
+
 
     // Distance fog toward the horizon color (linear HDR, before tone mapping).
     // It hides the far edge of the ground plane and gives the flat ground

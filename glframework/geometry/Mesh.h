@@ -21,6 +21,11 @@ public:
     void upload(const std::vector<glm::vec3>& positions, const std::vector<glm::vec3>& colors,
                 const std::vector<glm::vec3>& normals, const std::vector<unsigned int>& indices);
 
+    /// 带 UV（属性位置 3）的重载；空 UV 数组会补零，供没有贴图的对象使用。
+    void upload(const std::vector<glm::vec3>& positions, const std::vector<glm::vec3>& colors,
+                const std::vector<glm::vec3>& normals, const std::vector<glm::vec2>& uvs,
+                const std::vector<unsigned int>& indices);
+
     void draw() const;
 
     /// 只绘制索引区间 [firstIndex, firstIndex + indexCount)。
@@ -38,6 +43,7 @@ private:
     GLuint m_positionVbo = 0;
     GLuint m_colorVbo = 0;
     GLuint m_normalVbo = 0;
+    GLuint m_uvVbo = 0;
     GLuint m_ebo = 0;
     GLsizei m_indexCount = 0;
 };

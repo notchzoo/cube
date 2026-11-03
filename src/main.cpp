@@ -21,8 +21,13 @@ struct Options
     bool mouseLook = true;
     bool hidden = false;
     bool aircraftOnly = false;
+    bool jetOnly = false;
     bool drive = false; // [驾驶交互] --drive 只尝试进入；仍受座舱距离限制，需配合 --camera
     bool rotors = true;
+    bool modelEnabled = true;
+    std::string modelPath = "su_57.glb"; // 相对路径按资产目录解析
+    bool flyJet = false;
+    bool surfaceTest = false;
     float mainRotorAngle = 0.0f;
     float tailRotorAngle = 0.0f;
     float tailPitch = 0.0f;
@@ -73,6 +78,13 @@ void printUsage()
   --tail-rotor-angle <度>    尾桨初始相位
   --tail-pitch <度>          尾桨初始变距（夹紧到 ±18°）
   --stabilator-angle <度>    水平尾翼初始偏角（夹紧到 ±20°）
+
+模型:
+  --model <file.glb>         加载外部 glTF/GLB（默认 su_57.glb，相对 asset/）
+  --jet-only                 只显示喷气机和天空，检查顶部、腹部材质
+  --no-model                 不加载外部模型
+  --fly-jet                  启动后进入喷气机飞行（否则按 J）
+  --surface-test             启动后进入翼面检查（K 切换，1-5 选择，←/→ 或 [ ] 调整）
 
 运行:
   --run-for <秒>             运行指定时长后退出
@@ -173,6 +185,10 @@ int main(int argc, char** argv)
         {
             options.hidden = true;
         }
+        else if (name == "--jet-only")
+        {
+            options.jetOnly = true;
+        }
         else if (name == "--aircraft-only")
         {
             options.aircraftOnly = true;
@@ -180,6 +196,26 @@ int main(int argc, char** argv)
         else if (name == "--no-rotors")
         {
             options.rotors = false;
+        }
+        else if (name == "--model")
+        {
+            if (!takeString(options.modelPath))
+            {
+                return 2;
+            }
+            options.modelEnabled = true;
+        }
+        else if (name == "--no-model")
+        {
+            options.modelEnabled = false;
+        }
+        else if (name == "--fly-jet")
+        {
+            options.flyJet = true;
+        }
+        else if (name == "--surface-test")
+        {
+            options.surfaceTest = true;
         }
         else if (name == "--drive")
         {
@@ -323,9 +359,14 @@ int main(int argc, char** argv)
     Application application(1400, 900, "RenderingCube | OpenGL 3.3 PBR");
     // 资产目录先按“可执行文件同级 asset/”解析：构建后整个目录可以拷走直接运行。
     application.setAssetDirectory(asset::resolve(argv[0]));
+    if (options.modelEnabled)
+    {
+        application.setModelPath(options.modelPath);
+    }
     // 截图模式不需要窗口：隐藏后仍然正常渲染。
     application.setWindowVisible(!(options.hidden || !options.screenshotPath.empty()));
     application.setAircraftOnly(options.aircraftOnly);
+    application.setJetOnly(options.jetOnly);
 
     if (!application.initialize())
     {
@@ -384,6 +425,14 @@ int main(int argc, char** argv)
     if (options.drive)
     {
         application.setDriving(true);
+    }
+    if (options.flyJet)
+    {
+        application.setJetFlying(true);
+    }
+    if (options.surfaceTest)
+    {
+        application.setSurfaceTest(true);
     }
     if (options.runFor > 0.0f)
     {

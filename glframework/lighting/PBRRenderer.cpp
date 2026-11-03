@@ -4,6 +4,7 @@
 #include <string>
 
 #include "Mesh.h"
+#include "Texture2D.h"
 
 namespace
 {
@@ -25,6 +26,12 @@ constexpr const char* kUseShadowMap = "uUseShadowMap";
 constexpr const char* kReflectionStrength = "uReflectionStrength";
 constexpr const char* kShadowStrength = "uShadowStrength";
 constexpr const char* kPipCount = "uPipCount";
+constexpr const char* kMaterialMode = "uMaterialMode";
+constexpr const char* kUseAlbedoMap = "uUseAlbedoMap";
+constexpr const char* kAlbedoTop = "uAlbedoTop";
+constexpr const char* kAlbedoBottom = "uAlbedoBottom";
+constexpr const char* kUseAlbedoSide = "uUseAlbedoSide";
+constexpr const char* kAlbedoSide = "uAlbedoSide";
 }
 
 PBRRenderer::~PBRRenderer()
@@ -94,6 +101,28 @@ void PBRRenderer::draw(const Mesh& mesh, const glm::mat4& modelMatrix, const PBR
     m_shader.setFloat(kAo, sanitized.ao);
     m_shader.setFloat(kOpacity, sanitized.opacity);
     m_shader.setInt(kPipCount, std::clamp(pipCount, 0, 6));
+    m_shader.setInt(kMaterialMode, sanitized.materialMode);
+
+    // 单位 0 留给阴影贴图；livery 使用 1/2。
+    const bool useAlbedoMap =
+        sanitized.albedoTop != nullptr && sanitized.albedoTop->valid() && sanitized.albedoBottom != nullptr &&
+        sanitized.albedoBottom->valid();
+    m_shader.setInt(kUseAlbedoMap, useAlbedoMap ? 1 : 0);
+    if (useAlbedoMap)
+    {
+        sanitized.albedoTop->bind(1);
+        sanitized.albedoBottom->bind(2);
+        m_shader.setInt(kAlbedoTop, 1);
+        m_shader.setInt(kAlbedoBottom, 2);
+    }
+
+    const bool useAlbedoSide = useAlbedoMap && sanitized.albedoSide != nullptr && sanitized.albedoSide->valid();
+    m_shader.setInt(kUseAlbedoSide, useAlbedoSide ? 1 : 0);
+    if (useAlbedoSide)
+    {
+        sanitized.albedoSide->bind(3);
+        m_shader.setInt(kAlbedoSide, 3);
+    }
 
     if (indexCount > 0)
     {

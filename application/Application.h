@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -7,6 +8,7 @@
 
 #include "Camera.h"
 #include "ThirdPersonCamera.h"
+#include "Texture2D.h"
 #include "DiceObject.h"
 #include "LightRig.h"
 #include "MeshObject.h"
@@ -22,6 +24,8 @@
 
 struct GLFWwindow;
 class AttackHelicopterObject;
+class GltfObject;
+class FixedWingObject;
 
 /// 程序骨架：窗口、输入、每帧调度与渲染顺序。
 ///
@@ -102,9 +106,20 @@ public:
     /// initialize() 之后调用：启动时就打开调参面板（配合 --ui / 截图用）。
     void setOverlayPanelVisible(bool visible);
 
+    /// 可选 glTF/GLB 模型；相对路径按资产目录解析。必须在 initialize() 之前调用。
+    /// 加载失败只打印日志，场景其余部分照常运行。
+    void setModelPath(const std::string& path) { m_modelPath = path; }
+
+    /// [喷气机] initialize() 之后调用；J 键与 --fly-jet 共用入口。
+    void setJetFlying(bool enabled);
+    bool jetFlying() const { return m_jetFlying; }
+    /// [翼面检查] initialize() 之后调用；K 键与 --surface-test 共用入口。
+    void setSurfaceTest(bool enabled);
+
     /// 必须在 initialize() 之前调用；隐藏窗口时仍可正常渲染。
     void setWindowVisible(bool visible);
     /// Before initialize(): omit the dice for unobstructed aircraft close-up inspection.
+    void setJetOnly(bool enabled) { m_jetOnly = enabled; }
     void setAircraftOnly(bool enabled) { m_aircraftOnly = enabled; }
     void setHelicopterRotorsEnabled(bool enabled);
     /// Deterministic articulation pose, in degrees; also useful for screenshots.
@@ -129,6 +144,7 @@ private:
     bool createWindow();
     bool loadShaders();
     void createScene();
+    void createGltfModel();
 
     void processInput(float deltaSeconds);
     void renderScene();
@@ -136,6 +152,8 @@ private:
     void updateVehicleCamera(float deltaSeconds); // 飞机更新后调用，跟随相机和阴影
     void updateInteractionPrompt();               // 自由模式显示靠近距离/按 G 提示
     void drawOverlay();                           // 速度药丸 + 调参面板（所有三维绘制之后）
+    void updateSurfaceTest(float deltaSeconds);
+    void resetJet();
     void setLightAngles(float azimuthDegrees, float elevationDegrees);
 
     /// 按一个 DrawItem 设置材质并绘制；主体与阴影 pass 都不认识具体对象类型。
@@ -148,6 +166,7 @@ private:
     GLFWwindow* m_window = nullptr;
     std::string m_title;
     std::string m_assetDirectory;
+    std::string m_modelPath;
     int m_windowWidth = 1400;
     int m_windowHeight = 900;
     int m_framebufferWidth = 0;
@@ -162,6 +181,7 @@ private:
     DiceObject* m_dice = nullptr;
     MeshObject* m_ground = nullptr;
     AttackHelicopterObject* m_helicopter = nullptr;
+    FixedWingObject* m_jet = nullptr;
 
     PBRRenderer m_pbrRenderer;
     ShadowMap m_shadowMap;
@@ -175,6 +195,30 @@ private:
     float m_smoothedFrameMilliseconds = 16.0f;
     float m_lightAzimuthDegrees = 37.4f;   // 与默认光向 (-0.55, -1, -0.42) 对应的太阳方位
     float m_lightElevationDegrees = 57.2f; // 同上，太阳高度角
+    bool m_jetFlying = false;
+    bool m_jetToggleWasDown = false;
+    bool m_jetAutopilot = true;
+    bool m_jetAutopilotWasDown = false;
+    bool m_jetAutoThrottle = true;
+    bool m_jetAutoThrottleWasDown = false;
+    float m_jetThrottle = 0.0f;
+    bool m_jetBrakes = false;
+    bool m_jetBrakeWasDown = false;
+    bool m_jetResetWasDown = false;
+    bool m_jetHasTouchedDown = false;
+    bool m_jetHardLanding = false;
+    float m_jetTouchdownSpeed = 0.0f;
+    Texture2D m_jetTopTexture;
+    Texture2D m_jetBottomTexture;
+    Texture2D m_jetSideTexture;
+    bool m_jetLiveryLoaded = false;
+    bool m_surfaceTest = false;
+    int m_surfaceGroup = 0;
+    std::array<float, 5> m_surfaceTestAngles{};
+    bool m_surfaceToggleWasDown = false;
+    bool m_surfaceAdjustWasDown[2] = {false, false};
+    bool m_surfaceDigitWasDown[5] = {false, false, false, false, false};
+    bool m_surfaceResetWasDown = false;
     Shader m_shadowDepthShader;
     ShaderWatcher m_shaderWatcher; // [热重载] 监视全部着色器及其 #include 依赖
 
@@ -187,6 +231,7 @@ private:
     bool m_mouseLookEnabled = true;
     bool m_windowVisible = true;
     bool m_aircraftOnly = false;
+    bool m_jetOnly = false;
     bool m_spaceWasDown = false;
     bool m_rotorToggleWasDown = false;
     bool m_driving = false, m_interactWasDown = false; // 驾驶状态 / G 上一帧是否按住

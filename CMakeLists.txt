@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(RenderingCube VERSION 0.12.01 LANGUAGES C CXX)
+project(RenderingCube VERSION 0.12.02 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,9 +7,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ---------------------------------------------------------------------------
 # 用户提供的依赖统一放在 third_party，不替换版本：
-#   third_party/glfw   GLFW 3.5.1 预编译静态库（x64，Debug CRT）
-#   third_party/glad   生成的 GL 3.3 core 加载器源码
-#   third_party/glm    header-only 数学库
+#   third_party/glfw     GLFW 3.5.1 预编译静态库（x64，Debug CRT）
+#   third_party/glad     生成的 GL 3.3 core 加载器源码
+#   third_party/glm      header-only 数学库
+#   third_party/cgltf    header-only glTF/GLB 解析（MIT）
 # ---------------------------------------------------------------------------
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 set(GLFW_ROOT "${THIRD_PARTY_DIR}/glfw")
@@ -24,6 +25,9 @@ if(NOT EXISTS "${GLAD_ROOT}/src/glad.c")
 endif()
 if(NOT EXISTS "${GLM_ROOT}/glm/glm.hpp")
     message(FATAL_ERROR "找不到 GLM 头文件: ${GLM_ROOT}/glm/glm.hpp")
+endif()
+if(NOT EXISTS "${THIRD_PARTY_DIR}/cgltf/cgltf.h")
+    message(FATAL_ERROR "找不到 cgltf: ${THIRD_PARTY_DIR}/cgltf/cgltf.h")
 endif()
 
 # GLFW：导入预编译静态库，头文件与库必须同源。
@@ -59,6 +63,12 @@ set(RENDERINGCUBE_SOURCES
     glframework/physics/HelicopterParameters.h
     glframework/physics/HelicopterDynamics.h
     glframework/physics/HelicopterDynamics.cpp
+    glframework/physics/FixedWingParameters.h
+    glframework/physics/FixedWingControls.h
+    glframework/physics/FixedWingDynamics.h
+    glframework/physics/FixedWingDynamics.cpp
+    glframework/physics/FixedWingAutopilot.h
+    glframework/physics/FixedWingAutopilot.cpp
     glframework/ShadowMap.h
     glframework/ShadowMap.cpp
     glframework/SkyDome.h
@@ -72,6 +82,12 @@ set(RENDERINGCUBE_SOURCES
     glframework/geometry/Mesh.cpp
     glframework/geometry/MeshBuilder.h
     glframework/geometry/MeshBuilder.cpp
+    glframework/geometry/GltfLoader.h
+    glframework/geometry/GltfLoader.cpp
+    glframework/geometry/Su57Rig.h
+    glframework/geometry/Su57Rig.cpp
+    glframework/texture/Texture2D.h
+    glframework/texture/Texture2D.cpp
     glframework/geometry/AttackHelicopterGeometry.h
     glframework/geometry/AttackHelicopterGeometry.cpp
 
@@ -90,6 +106,10 @@ set(RENDERINGCUBE_SOURCES
     glframework/scene/DiceObject.cpp
     glframework/scene/AttackHelicopterObject.h
     glframework/scene/AttackHelicopterObject.cpp
+    glframework/scene/GltfObject.h
+    glframework/scene/GltfObject.cpp
+    glframework/scene/FixedWingObject.h
+    glframework/scene/FixedWingObject.cpp
     glframework/scene/Scene.h
     glframework/scene/Scene.cpp
 
@@ -118,6 +138,8 @@ target_include_directories(RenderingCube PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/glframework/lighting"
     "${CMAKE_CURRENT_SOURCE_DIR}/glframework/scene"
     "${CMAKE_CURRENT_SOURCE_DIR}/glframework/physics"
+    "${CMAKE_CURRENT_SOURCE_DIR}/glframework/texture"
+    "${THIRD_PARTY_DIR}"
     "${GLM_ROOT}"
 )
 
@@ -188,4 +210,33 @@ if(BUILD_TESTING)
         set_property(TARGET HelicopterDynamicsTest PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDebugDLL")
     endif()
     add_test(NAME HelicopterDynamics COMMAND HelicopterDynamicsTest)
+
+    add_executable(GltfLoaderTest
+        tests/GltfLoaderTest.cpp
+        glframework/geometry/GltfLoader.cpp)
+    target_include_directories(GltfLoaderTest PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/glframework/geometry"
+        "${CMAKE_CURRENT_SOURCE_DIR}/glframework/lighting"
+        "${THIRD_PARTY_DIR}"
+        "${GLM_ROOT}")
+    target_compile_definitions(GltfLoaderTest PRIVATE
+        RENDERINGCUBE_TEST_MODEL="${CMAKE_CURRENT_SOURCE_DIR}/asset/su_57.glb")
+    if(MSVC)
+        target_compile_options(GltfLoaderTest PRIVATE /utf-8)
+        set_property(TARGET GltfLoaderTest PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDebugDLL")
+    endif()
+    add_test(NAME GltfLoader COMMAND GltfLoaderTest)
+
+    add_executable(FixedWingFlightTest
+        tests/FixedWingFlightTest.cpp
+        glframework/physics/FixedWingDynamics.cpp
+        glframework/physics/FixedWingAutopilot.cpp)
+    target_include_directories(FixedWingFlightTest PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/glframework/physics"
+        "${GLM_ROOT}")
+    if(MSVC)
+        target_compile_options(FixedWingFlightTest PRIVATE /utf-8)
+        set_property(TARGET FixedWingFlightTest PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDebugDLL")
+    endif()
+    add_test(NAME FixedWingFlight COMMAND FixedWingFlightTest)
 endif()

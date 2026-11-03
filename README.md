@@ -1,12 +1,16 @@
 # RenderingCube
 
-> **当前版本：v0.12.01**（2026-11-02）· 变更见 [CHANGELOG.md](CHANGELOG.md) · 完整手册见 [docs/MANUAL.md](docs/MANUAL.md)
+> **当前版本：v0.12.02**（2026-11-03）· 变更见 [CHANGELOG.md](CHANGELOG.md) · 完整手册见 [docs/MANUAL.md](docs/MANUAL.md)
 
 基于 GLFW + GLAD + GLM 的 OpenGL 3.3 Core 渲染示例：硬边立方体落在超大地面片上，
 Cook-Torrance PBR（GGX / Smith / Schlick Fresnel）、方向光阴影贴图（3x3 PCF）、
 程序化天空球与粗糙度感知的环境反射近似，最后走 Reinhard 色调映射 + Gamma 校正。
 
 v0.12 加入 AH-64D 风格直升机、可动旋翼与尾翼、简化飞行动力学、第三人称驾驶及实时速度面板。
+
+场景默认还加载 `asset/su_57.glb`（约 150 万个三角形）：由 `cgltf` 解析成 `Mesh`，
+用参数化 PBR 材质参与主 pass 与阴影 pass；按 `J` 可让它按固定翼气动起飞、爬升和盘旋，
+`--no-model` 可回到只含骰子与直升机的场景。
 
 ## 依赖
 
@@ -17,6 +21,7 @@ v0.12 加入 AH-64D 风格直升机、可动旋翼与尾翼、简化飞行动力
 | GLFW 3.5.1 | `third_party/glfw` | x64 预编译静态库 `lib/glfw3.lib` |
 | GLAD | `third_party/glad` | GL 3.3 core 加载器，源码编译为静态库 |
 | GLM | `third_party/glm` | header-only 数学库 |
+| cgltf 1.15 | `third_party/cgltf` | 单头文件 glTF/GLB 解析（MIT），无其它依赖 |
 
 注意：随项目提供的 `glfw3.lib` 是 Debug CRT 构建的，因此 CMake 把所有目标统一成
 `/MDd`，否则链接会报 LNK2038（RuntimeLibrary 不匹配）。
@@ -49,12 +54,14 @@ RenderingCube --version   # 版本号来自 CMake 的 project(VERSION)
 
 新增功能的调用入口、更新顺序和调参位置见 [载具代码调用索引](docs/VEHICLE_CODE_MAP.md)。
 
-画面右上角显示直升机当前速度，单位 km/h，保留一位小数，包含水平移动和升降速度。
-未启用飞行物理时显示 0.0；驾驶和自由观察模式均可查看。
+画面右上角显示当前载具速度，单位 km/h，保留一位小数。直升机驾驶时包含水平移动和
+升降速度；喷气机飞行时显示喷气机速度，未启用飞行物理时显示 0.0。
 
 | 输入 | 行为 |
 | --- | --- |
 | G | 靠近座舱后驾驶直升机；驾驶中可随时退出，按住不会反复切换 |
+| J | 进入 / 退出喷气机飞行；进入后自动起飞 |
+| P | 喷气机飞行时切换自动驾驶；有俯仰/滚转/偏航输入会自动退自驾并保持手动姿态 |
 | 鼠标 | 自由模式转视角；驾驶模式仅控制第三人称观察，不改变飞机朝向 |
 | W / S | 自由相机前后；驾驶时沿飞机自身朝向前进 / 后退 |
 | A / D | 自由相机左右；驾驶时沿机身左 / 右侧移 |
@@ -64,8 +71,28 @@ RenderingCube --version   # 版本号来自 CMake 的 project(VERSION)
 | R | 未激活物理时暂停 / 继续旋翼；进入过驾驶后开关发动机，旋翼平滑加减速 |
 | Q / E | 驾驶时转向并调整尾桨变距；静态展示时仅调整尾桨变距 |
 | Z / C | 水平尾翼偏转；驾驶时附带轻微俯仰配平 |
-| Left Shift | 移动加速 |
+| T | 喷气机飞行时切换自动 / 手动油门 |
+| B | 喷气机接地后切换机轮刹车；刹车时禁用地面转向 |
+| Backspace | 把喷气机重置到初始停机位（自驾/自动油门关、刹车开） |
+| K | 静止时进入 / 退出翼面检查；1-5 选择翼面组，←/→ 或 [ ] 调整，0 归零 |
+| Left Shift | 移动加速；喷气机飞行时为手动油门增加 |
 | Esc | 退出 |
+
+喷气机飞行中：`W / S` 推杆低头 / 拉杆抬头，`A / D` 左 / 右滚转，`Q / E` 偏航；
+`P` 切换自动驾驶，`T` 切换自动油门，`Shift / Ctrl` 在手动油门下增减推力；
+鼠标与滚轮调整第三人称跟随视角。速度药丸同时显示油门、过载和自驾状态。
+
+翼面检查（静止、非飞行时按 `K`）：`1` flaperon、`2` 前缘襟翼、`3` 全动平尾、
+`4` 方向舵、`5` 喷口；`→` 增加、`←` 减小（`]`/`[` 同义），点按先加/减 2°，
+按住以 25°/s 连续变化，松开后角度保持；`0` 归零。各组范围：flaperon ±25°、
+前缘襟翼 0..20°、平尾 ±25°、方向舵 ±25°、喷口 ±14°。该模式只驱动视觉偏角，
+不参与气动力矩。
+
+降落与重置：先按 `P` 断开自驾、`T` 断开自动油门，用 `Ctrl` 收油门并对准地面下降；
+接地后自动收油门、断开自驾并刹车，HUD 记录接地垂直速度，`B` 可松开刹车滑跑。
+`Backspace` 随时把飞机放回初始停机位；重置后按 `B` 松刹车、`P` 自驾、`T` 自动油门即可重新起飞。
+HUD 左下角显示高度、升降速度、航向、迎角、过载、接地速度、刹车、自驾和空中/地面状态；
+迎角接近失速时顶部闪烁 `STALL`。
 
 ## 对外配置接口
 
@@ -104,8 +131,8 @@ for (int face = 0; face < Application::kCubeFaceCount; ++face) {
 坐标把每个面归一化到 `[-1,1]`，再按 3×3 网格点亮对应位置。所以点数不会增加顶点数，
 也不产生自己的阴影/凹陷；如果要真正的凹点，需要几何或法线贴图。
 
-不需要为材质新建目录：材质是代码里的数据，`glframework/lighting/` 已经够用；
-只有当点数改用贴图时，才值得加 `asset/texture/`。
+材质默认是代码里的数据，`glframework/lighting/` 已经够用；Su-57 的 livery 是例外：
+它需要 `asset/texture/su57_top/bottom/side.bmp` 和 `glframework/texture/Texture2D`。
 
 ## 命令行开关
 
@@ -116,6 +143,10 @@ for (int face = 0; face < Application::kCubeFaceCount; ++face) {
 --metallic <0..1>        覆盖六面的金属度（保留每面颜色）
 --no-pips                不画骰子点数，只显示每面材质颜色
 --aircraft-only          仅显示飞机和地面，便于近距离检查机头
+--model <file.glb>       加载外部 glTF/GLB（默认 su_57.glb，相对 asset/）
+--no-model               不加载外部模型
+--fly-jet                启动后直接进入喷气机飞行（否则按 J）
+--surface-test           启动后进入翼面检查（K 切换，1-5 选择，←/→ 或 [ ] 调整）
 --drive                  启动时尝试驾驶，仍需用 --camera 把相机放在座舱附近
 --no-rotors              启动时暂停旋翼，运行中可用 R 继续
 --main-rotor-angle <度>  主旋翼初始相位
@@ -157,12 +188,22 @@ glframework/
   ui/Overlay.h/.cpp     即时模式覆盖层：文字、圆角面板、滑杆/开关（取代旧的 GDI 速度面板）
   geometry/Mesh.h/.cpp  VAO + position/color/normal 三个 VBO + EBO
   geometry/MeshBuilder.h/.cpp  程序化几何累加（盒体/圆柱/放样，自动纠正绕序）
+  geometry/GltfLoader.h/.cpp   glTF/GLB → CPU 三角网格（cgltf，缺法线时补平滑法线）
+  geometry/Su57Rig.h/.cpp      单块 su_57 网格按估算铰链切成机身 + 10 个控制面
+  texture/Texture2D.h/.cpp     BMP livery 贴图加载与 GL 绑定
+  physics/
+    HelicopterDynamics.h/.cpp   直升机 120 Hz 刚体 + 旋翼/辅助飞控
+    FixedWingDynamics.h/.cpp    固定翼 6DOF：升力/阻力/失速/推力/地面
+    FixedWingAutopilot.h/.cpp   起飞、爬升、高度/速度保持与盘旋
+    FixedWingParameters.h       固定翼演示参数（公开估算，非实机标定）
   scene/                场景层：对象只产出 DrawItem，不认识渲染器
     DrawItem.h          一次绘制：几何 / 变换 / 材质 / 点数 / 索引段
     SceneObject.h       对象接口（appendDrawItems / appendShadowItems）
     MeshObject.h/.cpp   通用"网格 + 材质"（地面）
     DiceObject.h/.cpp   骰子（六面材质 + 点数 + 自转）
     HelicopterObject.h/.cpp  程序化直升机（放样机身 + 尾翼 + 旋翼 + 滑橇）
+    GltfObject.h/.cpp   glTF 模型（每个 primitive 一条 DrawItem）
+    FixedWingObject.h/.cpp  glTF 视觉 + 固定翼物理，每帧写 Model
     Scene.h/.cpp        对象容器
   lighting/
     DirectionalLight.h  方向 + 辐照度（没有物理位置）
@@ -239,6 +280,13 @@ src/main.cpp            命令行解析（未知参数报错）+ 少量默认配
 - 覆盖层的文字栅格化使用 Windows 系统字体（GDI 只在启动时把字形画进图集）；
   其它平台会退化为不显示文字，三维渲染与截图不受影响。
 - 调参面板改动的是运行期状态，不写回代码或命令行；重启即恢复默认。
+- glTF 模型只读取静态网格和 metallic-roughness 参数：贴图、skin、morph、动画和
+  Draco/meshopt 压缩几何都不参与渲染；`su_57.glb` 的 NORMAL 由加载器补算，硬边会被平滑。
+- 1.5M 三角形模型默认参与阴影 pass；`--no-shadow` 可把几何负载减半。
+- 固定翼物理是演示模型：参数来自公开估算，辅助飞控不是 Su-57 电传控制律；
+  过载限制是升力硬限幅（≤12g / ≥-3g），姿态保持基于速率指令而不是实机电传。
+- 控制面拆件是启发式切分：边界来自包围盒/平面估算，大角度偏转会有接缝/错位；
+  前缘襟翼和喷口目前只做视觉，不产生升力/矢量推力。
 
 ## 验证清单
 
@@ -252,6 +300,8 @@ src/main.cpp            命令行解析（未知参数报错）+ 少量默认配
 - `--transparent` 时背景能从立方体透出，地面阴影仍可见。
 - `--help` 列出全部开关；拼错的参数（例如 `--no-shdow`）以退出码 2 失败，不再静默忽略。
 - `--ui` 打开面板后拖动滑杆，画面立即响应；F1 关闭后光标回到鼠标观察模式。
+- 默认场景右侧出现 su_57；`--no-model` 后场景与旧版本一致；`GltfLoader` ctest 通过。
+- `--fly-jet --run-for 6 --screenshot` 能看到起飞；`ctest` 的 `FixedWingFlight` 用例通过。
 - 运行中修改 `asset/shader/pbr/pbr.frag`，控制台出现 `[Shader] reloaded:` 且画面更新；
   把着色器改坏时打印编译错误但画面保持上一版。
 
@@ -270,6 +320,18 @@ src/main.cpp            命令行解析（未知参数报错）+ 少量默认配
 F1 调参面板（`--ui` 启动即打开，覆盖层替代了旧的速度面板）：
 
 ![调试面板](docs/renderingcube-overlay.png)
+
+默认加载的 `asset/su_57.glb`（静态网格 + 参数化 PBR 材质，阴影默认开启）：
+
+![su_57](docs/renderingcube-su57.png)
+
+喷气机巡航（`--fly-jet --run-for 40`）：HUD 显示 583.7 km/h、高度 277 m、迎角 1.3°、1.0g：
+
+![su_57 flight](docs/renderingcube-su57-flight.png)
+
+翼面检查（`--surface-test` 或按 `K`）：1-5 选择，`[` / `]` 调整，面板实时显示各组角度：
+
+![su_57 surfaces](docs/renderingcube-su57-surfaces.png)
 
 ## 图片参考武装直升机（AttackHelicopterGeometry）
 
@@ -332,6 +394,98 @@ helicopter.update(deltaSeconds); // 每帧一次，在绘制和阴影 pass 之�
 ```
 
 ![AH-64D 机头细节](docs/ah64d-nose-quarter.png)
+
+## 外部 glTF 模型（su_57）
+
+`asset/su_57.glb` 是默认加载的静态模型（约 749,628 顶点 / 1,499,268 三角形），
+文件本身没有 NORMAL、材质、贴图、skin 和动画，加载器会补平滑法线并使用一套参数化
+`PBRMaterial`。链路与项目其它对象一致：
+
+```text
+GltfLoader（CPU 解析，cgltf）
+  -> Application::createGltfModel 上传 Mesh
+  -> GltfObject::appendDrawItems 产出 DrawItem
+  -> PBRRenderer / 阴影 pass 消费 DrawItem
+```
+
+- 模型入口：`--model <file.glb>`，相对路径按资产目录解析；`--no-model` 关闭。
+- 放置：按包围盒把底部对齐 `y=0`，中心放在 `(3.2, 0, -1.5)`，缩放 3.6。
+- 阴影：默认参与；1.5M 三角形对阴影 pass 有成本，帧率不足时用 `--no-shadow`。
+- 当前只支持静态网格、节点变换和 metallic-roughness 参数：贴图、skin、morph、
+  animation、Draco/meshopt 压缩会被忽略或明确拒绝。
+- CPU 解析不需要 GL 上下文，`ctest --preset debug` 中的 `GltfLoader` 用例校验
+  顶点/索引数量、索引范围、法线长度和包围盒。
+
+### Su-57 054 参考涂装与分区材质
+
+按用户提供的上下视参考重绘蓝灰/浅灰数码迷彩，取代随机大方块。顶部和腹部贴图为
+3072×2048，侧面为 2048×1024，包含白边红星、蓝绿色翼尖、细面板线与侧面 054 机号。
+贴图由 `tools/make_su57_livery.py` 统一生成（需要 Pillow、NumPy），从任意目录运行；
+`tools/make_su57_side.py` 保留为侧面贴图的兼容入口。生成结果已随资产保存，运行时无需 Python。
+
+`asset/shader/common/su57.glsl` 仅由 Su-57 的 materialMode=2 启用，分开处理漆面、
+雷达罩、深色反光座舱、尾锥和带环纹/喷口瓣缝的热变色金属；贴图缺失时保留程序化迷彩。
+平面投影负责上下表面，侧面投影限于机身和垂尾，避免冲淡翼面红星；纹理启用 mipmap
+以减少远距离像素边界闪烁。没有改变现有控制面变换和飞行动力学。
+
+当前仍是源网格坐标投影与程序化分区，不是逐像素照片复刻：左右迷彩近似对称，
+参考图中的不对称像素、细密铆钉、机号位置、玻璃内部和烧蚀旧化尚有差异；
+座舱为不透明反光近似，没有新增内部模型或折射。
+
+新增 `--jet-only` 隐藏其它物体和地面，可检查腹部，默认场景不变。当前路径可独立构建：
+
+```powershell
+cmake -S . -B build-material -A x64
+cmake --build build-material --config Debug --target RenderingCube
+./build-material/Debug/RenderingCube.exe --jet-only --no-mouse --camera 1.4 2.7 2.6 -64 -29
+```
+
+验证：Debug 编译；四项 CTest 通过；NVIDIA OpenGL 3.3 实际加载 GLSL，输出顶部、
+腹部和斜前方的 4x MSAA 截图。
+
+![Su-57 054 顶部](docs/su57-livery-top.png)
+![Su-57 054 腹部](docs/su57-livery-bottom.png)
+![Su-57 054 斜前方](docs/su57-livery-quarter.png)
+
+### 喷气机飞行（FixedWingDynamics）
+
+`J` 或 `--fly-jet` 启用固定翼物理，视觉模型由 `FixedWingObject` 每帧按物理状态写 Model：
+
+- 120 Hz 固定步长 6DOF：升力/阻力/侧力由空速、迎角和动压计算，失速后 CL 下降、CD 上升；
+  推力沿机体 +X，重力在世界坐标；法向过载、角速度和姿态都由力/力矩积分。
+- 参数在 `glframework/physics/FixedWingParameters.h`：质量 18 t、翼面积 78.8 m²、
+  最大推力 2×147 kN 等，属于公开资料估算，不是 Su-57 实机标定。
+- 辅助飞控先完成起飞（约 72 m/s 抬轮）、爬升到 300 m，再以约 160 m/s 盘旋。
+  姿态手动输入会自动退出自驾并保持当前姿态；按 `P` 可重新接入自驾（改平机翼并保持高度）。
+- 姿态保持：松开操纵后目标角速度为 0，俯仰/滚转姿态保持，不再像原型一样 2 秒后被自驾拉回。
+- 过载限制：升力硬限幅为 **≤12g / ≥-3g**；继续拉杆只会增大迎角，不会突破结构过载。
+  速度药丸显示当前过载。
+- 倾斜转弯：侧滑产生垂尾风标偏航，机头跟随速度矢量；压坡度后升力的水平分量改变航向，
+  第三人称相机也跟着机体航向转动（鼠标输入作为相对偏移保留）。
+- 油门是独立通道：默认自动油门用 PI 速度保持，稳态约 160 m/s；按 `T` 或
+  `Shift / Ctrl` 切到手动油门，手动值会一直保持，直到再按 `T` 回到自动。
+  速度药丸显示“油门 xx% 自动/手动”。
+- 驾驶手感限幅：俯仰 0.35 rad/s、滚转 1.1 rad/s、偏航 0.3 rad/s，避免原型的快速翻滚失真。
+- 第三人称相机使用与视觉相同的物理插值状态作为焦点，避免 120 Hz 步进在高速/急转时
+  造成画面抖动；跟随系数也按喷气机速度单独调过。
+- 控制面：`Su57Rig` 把整块网格按估算铰链切成机身 + 10 个面（左右 flaperon、前缘襟翼、
+  全动平尾、方向舵、喷口）。飞控把目标角加速度反解成翼面偏角，再由翼面力矩推动角速度积分；
+  视觉旋转和力矩使用同一份偏角。flaperon/平尾/方向舵参与力矩，前缘襟翼/喷口目前只做视觉。
+- 翼面检查：`K` 或 `--surface-test` 进入；1-5 选择，`←`/`→`（或 `[`/`]`）点按 2°、
+  按住 25°/s，松开保持，`0` 归零；范围 flaperon ±25°、前缘襟翼 0..20°、平尾 ±25°、
+  方向舵 ±25°、喷口 ±14°。该模式只改视觉偏角，不参与气动力矩；飞行中要先 `J` 退出。
+- HUD：左下角显示高度、升降速度、航向、迎角、过载、接地速度、刹车、自驾和空中/地面状态；
+  速度药丸保留速度/油门/过载/自驾；迎角超过失速角 90% 时顶部闪烁 `STALL`。
+- 降落：断开自驾和自动油门后下降；接地产生 touchdown 事件并记录垂直速度，自动收油门、
+  断开自驾并刹车；`B` 松开刹车，低速时 `Q/E` 可地面转向，`Backspace` 重置到停机位。
+- `FixedWingFlight` ctest 覆盖起飞/巡航、过载范围（-3g .. 12g）、俯仰姿态保持、倾斜转弯、
+  接地事件和刹车减速。
+
+当前限制：拆件是**启发式切分**，不是 DCC 里按真实铰链手工拆的。边界来自包围盒/平面估算，
+大角度偏转时会出现接缝和轻微错位；前缘襟翼和喷口暂不产生升力/矢量推力。
+地面是单点接触的平地，没有跑道、起落架压缩/轮胎模型和损伤模型；刹车用滚动阻力近似，
+重着陆只提示，不损坏飞机。
+要获得可用品质，最好提供拆好节点的 GLB，替换 `Su57Rig` 的估算区域即可。
 
 ## 太阳图层（SunSprite）
 
