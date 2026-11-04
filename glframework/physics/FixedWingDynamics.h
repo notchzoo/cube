@@ -42,6 +42,13 @@ public:
     float sideslip() const { return m_sideslip; }
     void setBrakes(bool enabled) { m_brakes = enabled; }
     bool brakes() const { return m_brakes; }
+    /// 起落架/前轮逻辑状态；没有几何模型，只影响近地面减速和 HUD。
+    void setGearDown(bool down) { m_gearDown = down; }
+    bool gearDown() const { return m_gearDown; }
+    /// 直接翼面模式：跳过速率指令反解，用驾驶给出的固定小偏角直接产生力矩。
+    void setDirectSurfaceMode(bool enabled);
+    bool directSurfaceMode() const { return m_directSurfaces; }
+    void setDirectSurfaceTarget(const ControlSurfaceAngles& target) { m_directTarget = target; }
     float lastTouchdownVerticalSpeed() const { return m_touchdownVerticalSpeed; }
     /// 读取并清除“刚刚接地”事件，Application 每帧消费一次。
     bool consumeTouchdownEvent()
@@ -66,7 +73,10 @@ private:
     float m_loadFactor = 0.0f;
     float m_sideslip = 0.0f;
     ControlSurfaceAngles m_surfaceAngles;
+    ControlSurfaceAngles m_directTarget;
+    bool m_directSurfaces = false;
     bool m_brakes = false;
+    bool m_gearDown = true;
     bool m_touchdownEvent = false;
     float m_touchdownVerticalSpeed = 0.0f;
     double m_accumulator = 0.0;

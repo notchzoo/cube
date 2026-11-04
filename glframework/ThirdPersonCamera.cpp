@@ -13,13 +13,6 @@ glm::vec3 ThirdPersonCamera::orbitForward() const
     const float pitch = glm::radians(m_pitch);
     return horizontalForward() * std::cos(pitch) + glm::vec3(0, std::sin(pitch), 0);
 }
-glm::vec3 ThirdPersonCamera::movementDirection(float forward, float right) const
-{
-    const auto f = horizontalForward();
-    auto movement = f * forward + glm::vec3(-f.z, 0, f.x) * right;
-    const float length = glm::length(movement);
-    return length > 1 ? movement / length : movement;
-}
 void ThirdPersonCamera::enter(glm::vec3 target, glm::vec3 forward, Camera& camera)
 {
     // [第三人称相机] 仅进入驾驶时重设初始轨道；每帧 update 不重设 yaw，鼠标观察才不会被拉回。

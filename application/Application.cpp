@@ -1,6 +1,4 @@
 #include "Application.h"
-#include "AttackHelicopterGeometry.h"
-#include "AttackHelicopterObject.h"
 #include "FixedWingObject.h"
 #include "GltfLoader.h"
 #include "GltfObject.h"
@@ -170,7 +168,7 @@ void Application::run(float durationSeconds)
         // 不要在 renderScene 的两个 pass 中推进物理或动画，否则一帧会积分两次。
         processInput(deltaSeconds);
         // 滚轮只累加目标高度，这里每帧平滑逼近，效果和按键一样连续。
-        if (!m_driving && !m_jetFlying)
+        if (!m_jetFlying)
             m_camera.updateElevation(deltaSeconds);
 
         // 自转由对象自己推进：暂停时角度保留，恢复从原处继续。
@@ -178,8 +176,6 @@ void Application::run(float durationSeconds)
         {
             m_dice->update(deltaSeconds);
         }
-        if (m_helicopter != nullptr)
-            m_helicopter->update(deltaSeconds);
         if (m_jet != nullptr && m_jetFlying)
         {
             m_jet->update(deltaSeconds);
@@ -189,18 +185,34 @@ void Application::run(float durationSeconds)
                 m_jetTouchdownSpeed = m_jet->dynamics().lastTouchdownVerticalSpeed();
                 m_jetHardLanding = m_jetTouchdownSpeed < -8.0f;
 
-                // 接地后自动收油门、断开自驾并刹车，避免自动油门立刻把飞机重新拉起来。
-                m_jetAutopilot = false;
-                m_jet->setAutopilot(false);
+                // 接地后自动收油门并刹车，避免自动油门立刻把飞机重新拉起来。
                 m_jetAutoThrottle = false;
                 m_jetThrottle = 0.0f;
                 m_jet->setThrottleControl(true, 0.0f);
                 m_jetBrakes = true;
                 m_jet->setBrakes(true);
+                m_jetGearDown = true;
+                m_jet->setGearDown(true);
+                m_jetGearAutoRetractArmed = true;
+                m_jet->setDirectSurfaceMode(false);
+                resetDirectSurfaces(true);
+                clearFbwVisualSurfaces();
+                clearTrim();
                 std::cout << "[Jet] touchdown " << m_jetTouchdownSpeed << " m/s"
                           << (m_jetHardLanding ? " (hard landing)" : "") << "; brakes on, B release\n";
             }
+
+            // 离地后自动收起起落架；手动放下后不再自动收。
+            const flight::RigidBodyState& jetState = m_jet->dynamics().state();
+            if (m_jetGearAutoRetractArmed && m_jetGearDown && !jetState.grounded)
+            {
+                m_jetGearDown = false;
+                m_jet->setGearDown(false);
+                m_jetGearAutoRetractArmed = false;
+                std::cout << "[Jet] gear auto-retracted after liftoff\n";
+            }
         }
+
         updateVehicleCamera(deltaSeconds);
 
         renderScene();
@@ -212,56 +224,6 @@ void Application::run(float durationSeconds)
     }
 }
 
-void Application::setHelicopterRotorsEnabled(bool enabled)
-{
-    if (m_helicopter)
-        m_helicopter->setRotorsEnabled(enabled);
-}
-
-void Application::setHelicopterPose(float mainRotor, float tailRotor, float tailPitch, float stabilator)
-{
-    if (!m_helicopter)
-        return;
-    m_helicopter->setRotorAngles(mainRotor, tailRotor);
-    m_helicopter->setControlAngles(tailPitch, stabilator);
-}
-
-// [驾驶交互] G 与 --drive 共用的唯一切换入口；距离检查必须先于任何驾驶状态修改。
-// 进入：检查座舱距离 -> 启用物理 -> 记录机头航向 -> 初始化第三人称相机。
-// 退出：清空驾驶输入，保留飞机物理状态，让自由相机留在当前观察位置。
-void Application::setDriving(bool enabled)
-{
-    if (!m_helicopter || m_driving == enabled)
-        return;
-    if (enabled && !m_helicopter->canEnterFrom(m_camera.position()))
-    {
-        updateInteractionPrompt();
-        std::cout << "[Driving] out of reach; approach the cockpit before pressing G\n";
-        return;
-    }
-    m_driving = enabled;
-    m_helicopter->clearFlightControls();
-    m_firstMouseEvent = true;
-    m_titleUpdateTime = 0;
-    if (enabled)
-    {
-        m_helicopter->enableFlightPhysics();
-        const auto aircraftForward = m_helicopter->forwardDirection();
-        m_pilotHeading = std::atan2(-aircraftForward.z, aircraftForward.x);
-        m_chaseCamera.setFollowGain(7.0f);
-        m_chaseCamera.setHeadingFollow(false);
-        m_chaseCamera.enter(m_helicopter->focusPoint(), aircraftForward, m_camera);
-        std::cout << "[Driving] entered; WASD move, Space/Ctrl climb, Q/E yaw, G exit\n";
-    }
-    else
-    {
-        // Leave the free camera at its current safe chase-camera position.
-        m_camera.setPosition(m_camera.position());
-        updateInteractionPrompt();
-        std::cout << "[Driving] exited; free camera restored\n";
-    }
-}
-
 // [喷气机] J 键与 --fly-jet 共用入口。进入时启用固定翼物理并切到第三人称跟随；
 // 退出只暂停更新，保留飞机当前状态，再次进入从原处继续。
 void Application::setJetFlying(bool enabled)
@@ -269,23 +231,24 @@ void Application::setJetFlying(bool enabled)
     if (m_jet == nullptr || m_jetFlying == enabled)
         return;
 
-    if (enabled && m_driving)
-        setDriving(false);
-
     m_jetFlying = enabled;
     m_firstMouseEvent = true;
     m_titleUpdateTime = 0.0f;
 
     if (enabled)
     {
+        resetDirectSurfaces(true);
+        clearFbwVisualSurfaces();
+        clearTrim();
         m_jet->enableFlight();
-        m_jetAutopilot = true;
-        m_jet->setAutopilot(true);
         m_jetAutoThrottle = true;
         m_jetThrottle = 0.0f;
         m_jet->setThrottleControl(false, 0.0f);
         m_jetBrakes = false;
         m_jet->setBrakes(false);
+        m_jetGearDown = true;
+        m_jet->setGearDown(true);
+        m_jetGearAutoRetractArmed = true;
         m_jetHasTouchedDown = false;
         m_jetHardLanding = false;
         m_jetTouchdownSpeed = 0.0f;
@@ -294,16 +257,19 @@ void Application::setJetFlying(bool enabled)
         m_chaseCamera.setFollowGain(20.0f); // 高速目标：减小跟随滞后，同时避免过度放大帧间抖动
         m_chaseCamera.zoom(-2.0f);
         m_chaseCamera.mouseMovement(0.0f, -100.0f); // 从默认 -18° 抬到约 -8°，避免俯视地面
-        std::cout << "[Jet] flight started; W/S pitch, A/D roll, Q/E yaw, P autopilot, "
+        std::cout << "[Jet] flight started; W/S/A/D/Q/E FBW, M direct surfaces, "
                      "Shift/Ctrl throttle, T auto-throttle, B brakes, Backspace reset, J exit\n";
     }
     else
     {
+        resetDirectSurfaces(true);
+        clearFbwVisualSurfaces();
+        clearTrim();
         std::cout << "[Jet] flight paused\n";
     }
 }
 
-// [重置] 回到初始停机状态；油门/自驾/刹车都归零，按 B/P/T 再重新起飞。
+// [重置] 回到初始停机状态；油门/刹车都归零，按 B/T 再重新起飞。
 void Application::resetJet()
 {
     if (m_jet == nullptr)
@@ -311,15 +277,19 @@ void Application::resetJet()
 
     if (m_surfaceTest)
         setSurfaceTest(false);
+    resetDirectSurfaces(true);
+    clearFbwVisualSurfaces();
+    clearTrim();
 
     m_jet->resetFlight();
-    m_jetAutopilot = false;
-    m_jet->setAutopilot(false);
     m_jetAutoThrottle = false;
     m_jetThrottle = 0.0f;
     m_jet->setThrottleControl(true, 0.0f);
     m_jetBrakes = true;
     m_jet->setBrakes(true);
+    m_jetGearDown = true;
+    m_jet->setGearDown(true);
+    m_jetGearAutoRetractArmed = true;
     m_jetHasTouchedDown = false;
     m_jetHardLanding = false;
     m_jetTouchdownSpeed = 0.0f;
@@ -329,19 +299,326 @@ void Application::resetJet()
         m_chaseCamera.setHeadingFollow(true);
         m_chaseCamera.enter(m_jet->focusPoint(), m_jet->forwardDirection(), m_camera);
     }
-    std::cout << "[Jet] reset; B release brakes, P autopilot, T auto-throttle\n";
+    std::cout << "[Jet] reset; B release brakes, T auto-throttle\n";
 }
 
-// [翼面检查] 静止状态下按 K 进入：1-5 选择翼面组，[ ] 调整，0 归零。// 这里只驱动视觉偏角，不参与气动力矩；飞行模式会覆盖它，因此要求先退出飞行。
+// [直接翼面] 正常飞行中 W/S/A/D/Q/E 不再给速率指令，而是每次给一个小固定翼面偏角；
+// 按住每 0.08 s 继续增加，松开保持；X 回中。
+void Application::clearFbwVisualSurfaces()
+{
+    m_fbwVisualActive = false;
+    m_fbwVisualPitch = 0.0f;
+    m_fbwVisualRoll = 0.0f;
+    m_fbwVisualYaw = 0.0f;
+    for (float& timer : m_fbwVisualTimer)
+        timer = 0.0f;
+    for (bool& down : m_fbwVisualPositiveWasDown)
+        down = false;
+    for (bool& down : m_fbwVisualNegativeWasDown)
+        down = false;
+    if (m_jet != nullptr)
+        m_jet->clearVisualSurfaceOverride();
+}
+
+void Application::updateFbwVisualSurfaces(float deltaSeconds)
+{
+    if (m_jet == nullptr)
+        return;
+
+    const bool keys[6] = {
+        glfwGetKey(m_window, GLFW_KEY_W) == GLFW_PRESS, glfwGetKey(m_window, GLFW_KEY_S) == GLFW_PRESS,
+        glfwGetKey(m_window, GLFW_KEY_A) == GLFW_PRESS, glfwGetKey(m_window, GLFW_KEY_D) == GLFW_PRESS,
+        glfwGetKey(m_window, GLFW_KEY_Q) == GLFW_PRESS, glfwGetKey(m_window, GLFW_KEY_E) == GLFW_PRESS,
+    };
+    bool anyKey = false;
+    for (bool down : keys)
+        anyKey = anyKey || down;
+
+    if (!m_fbwVisualActive)
+    {
+        if (!anyKey)
+            return;
+        m_fbwVisualActive = true;
+        m_fbwVisualPitch = 0.0f;
+        m_fbwVisualRoll = 0.0f;
+        m_fbwVisualYaw = 0.0f;
+    }
+
+    const bool neutralDown = glfwGetKey(m_window, GLFW_KEY_X) == GLFW_PRESS;
+    if (neutralDown)
+    {
+        clearFbwVisualSurfaces();
+        return;
+    }
+
+    const float step = glm::radians(0.5f);
+    constexpr float repeatInterval = 0.12f;
+    const float returnRate = glm::radians(3.0f); // FBW 视觉翼面松键后缓慢回中
+    const float pitchLimit = glm::radians(20.0f);
+    const float rollLimit = glm::radians(25.0f);
+    const float yawLimit = glm::radians(20.0f);
+
+    struct Axis
+    {
+        bool positiveDown;
+        bool negativeDown;
+        float* angle;
+        float limit;
+        float positiveDirection;
+    };
+    Axis axes[3] = {
+        {keys[1], keys[0], &m_fbwVisualPitch, pitchLimit, -1.0f},
+        {keys[3], keys[2], &m_fbwVisualRoll, rollLimit, 1.0f},
+        {keys[5], keys[4], &m_fbwVisualYaw, yawLimit, 1.0f},
+    };
+
+    for (int i = 0; i < 3; ++i)
+    {
+        Axis& axis = axes[i];
+        const auto apply = [&](bool down, bool& wasDown, float direction)
+        {
+            if (!down)
+            {
+                wasDown = false;
+                return;
+            }
+            if (!wasDown)
+                *axis.angle += direction * step;
+            m_fbwVisualTimer[i] += deltaSeconds;
+            while (m_fbwVisualTimer[i] >= repeatInterval)
+            {
+                *axis.angle += direction * step;
+                m_fbwVisualTimer[i] -= repeatInterval;
+            }
+            *axis.angle = std::clamp(*axis.angle, -axis.limit, axis.limit);
+            wasDown = true;
+        };
+        apply(axis.positiveDown, m_fbwVisualPositiveWasDown[i], axis.positiveDirection);
+        apply(axis.negativeDown, m_fbwVisualNegativeWasDown[i], -axis.positiveDirection);
+        if (!axis.positiveDown && !axis.negativeDown)
+        {
+            m_fbwVisualTimer[i] = 0.0f;
+            // FBW 只改显示：松键后不回 FBW 实际角度，而是缓慢回中。
+            const float delta = returnRate * deltaSeconds;
+            if (std::abs(*axis.angle) <= delta)
+                *axis.angle = 0.0f;
+            else
+                *axis.angle -= std::copysign(delta, *axis.angle);
+        }
+    }
+
+    std::array<float, 10> angles{};
+    angles[0] = m_fbwVisualRoll;
+    angles[1] = -m_fbwVisualRoll;
+    angles[4] = m_fbwVisualPitch;
+    angles[5] = m_fbwVisualPitch;
+    angles[6] = m_fbwVisualYaw;
+    angles[7] = m_fbwVisualYaw;
+    m_jet->setVisualSurfaceOverride(angles);
+}
+
+void Application::clearTrim()
+{
+    m_jetPitchTrim = 0.0f;
+    m_jetRollTrim = 0.0f;
+    for (float& timer : m_trimTimer)
+        timer = 0.0f;
+    for (bool& down : m_trimArrowWasDown)
+        down = false;
+}
+
+// [微调] 正常飞行时方向键给出持续的杆量偏置；↑/↓ 低头/拉起，←/→ 左/右滚。
+// 数值是归一化杆量的百分比，不是舵面角度。K 翼面检查激活时方向键留给翼面检查。
+void Application::updateTrim(float deltaSeconds)
+{
+    if (m_jet == nullptr || m_surfaceTest)
+        return;
+
+    const bool up = glfwGetKey(m_window, GLFW_KEY_UP) == GLFW_PRESS;
+    const bool down = glfwGetKey(m_window, GLFW_KEY_DOWN) == GLFW_PRESS;
+    const bool left = glfwGetKey(m_window, GLFW_KEY_LEFT) == GLFW_PRESS;
+    const bool right = glfwGetKey(m_window, GLFW_KEY_RIGHT) == GLFW_PRESS;
+
+    const bool neutralDown = glfwGetKey(m_window, GLFW_KEY_X) == GLFW_PRESS;
+    if (neutralDown && !m_jetTrimXWasDown)
+    {
+        m_jetPitchTrim = 0.0f;
+        m_jetRollTrim = 0.0f;
+    }
+    m_jetTrimXWasDown = neutralDown;
+
+    const float step = 0.01f; // 1% 杆量
+    constexpr float repeatInterval = 0.08f;
+    const float trimLimit = 0.20f;
+
+    struct Axis
+    {
+        bool positiveDown;
+        bool negativeDown;
+        float* trim;
+    };
+    Axis axes[2] = {
+        {down, up, &m_jetPitchTrim},
+        {right, left, &m_jetRollTrim},
+    };
+
+    for (int i = 0; i < 2; ++i)
+    {
+        Axis& axis = axes[i];
+        const auto apply = [&](bool arrowDown, bool& wasDown, float direction)
+        {
+            if (!arrowDown)
+            {
+                wasDown = false;
+                return;
+            }
+            if (!wasDown)
+                *axis.trim += direction * step;
+            m_trimTimer[i] += deltaSeconds;
+            while (m_trimTimer[i] >= repeatInterval)
+            {
+                *axis.trim += direction * step;
+                m_trimTimer[i] -= repeatInterval;
+            }
+            *axis.trim = std::clamp(*axis.trim, -trimLimit, trimLimit);
+            wasDown = true;
+        };
+        apply(axis.positiveDown, m_trimArrowWasDown[i * 2], 1.0f);
+        apply(axis.negativeDown, m_trimArrowWasDown[i * 2 + 1], -1.0f);
+        if (!axis.positiveDown && !axis.negativeDown)
+            m_trimTimer[i] = 0.0f;
+    }
+}
+
+void Application::enterDirectSurfaces()
+{
+    if (m_jet == nullptr || m_jetDirectSurfaces)
+        return;
+    if (m_surfaceTest)
+        setSurfaceTest(false);
+    clearFbwVisualSurfaces();
+    m_jetDirectSurfaces = true;
+    m_directPitch = 0.0f;
+    m_directRoll = 0.0f;
+    m_directYaw = 0.0f;
+    for (float& timer : m_directRepeatTimer)
+        timer = 0.0f;
+    for (bool& down : m_directPositiveWasDown)
+        down = false;
+    for (bool& down : m_directNegativeWasDown)
+        down = false;
+    m_directNeutralWasDown = false;
+    m_jet->setDirectSurfaceMode(true);
+    m_jet->setDirectSurfaceTarget({});
+    std::cout << "[Jet] direct surfaces; W/S stabilator, A/D flaperon, Q/E rudder, X neutral\n";
+}
+
+void Application::resetDirectSurfaces(bool disable)
+{
+    m_directPitch = 0.0f;
+    m_directRoll = 0.0f;
+    m_directYaw = 0.0f;
+    for (float& timer : m_directRepeatTimer)
+        timer = 0.0f;
+    for (bool& down : m_directPositiveWasDown)
+        down = false;
+    for (bool& down : m_directNegativeWasDown)
+        down = false;
+    if (m_jet == nullptr)
+        return;
+    m_jet->setDirectSurfaceTarget({});
+    if (disable)
+    {
+        m_jet->setDirectSurfaceMode(false);
+        m_jetDirectSurfaces = false;
+    }
+}
+
+void Application::updateDirectSurfaces(float deltaSeconds)
+{
+    if (m_jet == nullptr)
+        return;
+
+    const bool keys[6] = {
+        glfwGetKey(m_window, GLFW_KEY_W) == GLFW_PRESS, glfwGetKey(m_window, GLFW_KEY_S) == GLFW_PRESS,
+        glfwGetKey(m_window, GLFW_KEY_A) == GLFW_PRESS, glfwGetKey(m_window, GLFW_KEY_D) == GLFW_PRESS,
+        glfwGetKey(m_window, GLFW_KEY_Q) == GLFW_PRESS, glfwGetKey(m_window, GLFW_KEY_E) == GLFW_PRESS,
+    };
+    if (!m_jetDirectSurfaces)
+        return;
+    if (m_jet->dynamics().state().grounded)
+        return;
+
+    const bool neutralDown = glfwGetKey(m_window, GLFW_KEY_X) == GLFW_PRESS;
+    if (neutralDown && !m_directNeutralWasDown)
+        resetDirectSurfaces(false);
+    m_directNeutralWasDown = neutralDown;
+
+    // 直接翼面是可选实验模式；巡航/配平量级取 0.5°，按住 0.12 s 再加一步。
+    const float step = glm::radians(0.5f);
+    constexpr float repeatInterval = 0.12f;
+    const float pitchLimit = glm::radians(20.0f);
+    const float rollLimit = glm::radians(25.0f);
+    const float yawLimit = glm::radians(20.0f);
+
+    struct Axis
+    {
+        bool positiveDown;
+        bool negativeDown;
+        float* angle;
+        float limit;
+        float positiveDirection;
+    };
+    Axis axes[3] = {
+        {keys[1], keys[0], &m_directPitch, pitchLimit, -1.0f}, // S 抬头 = 平尾负偏
+        {keys[3], keys[2], &m_directRoll, rollLimit, 1.0f},    // D 右滚
+        {keys[5], keys[4], &m_directYaw, yawLimit, 1.0f},      // E 右偏航
+    };
+
+    for (int i = 0; i < 3; ++i)
+    {
+        Axis& axis = axes[i];
+        const auto apply = [&](bool down, bool& wasDown, float direction)
+        {
+            if (!down)
+            {
+                wasDown = false;
+                return;
+            }
+            if (!wasDown)
+                *axis.angle += direction * step;
+            m_directRepeatTimer[i] += deltaSeconds;
+            while (m_directRepeatTimer[i] >= repeatInterval)
+            {
+                *axis.angle += direction * step;
+                m_directRepeatTimer[i] -= repeatInterval;
+            }
+            *axis.angle = std::clamp(*axis.angle, -axis.limit, axis.limit);
+            wasDown = true;
+        };
+
+        apply(axis.positiveDown, m_directPositiveWasDown[i], axis.positiveDirection);
+        apply(axis.negativeDown, m_directNegativeWasDown[i], -axis.positiveDirection);
+        if (!axis.positiveDown && !axis.negativeDown)
+            m_directRepeatTimer[i] = 0.0f;
+    }
+
+    flight::ControlSurfaceAngles target;
+    const float trimRoll = m_jetRollTrim * glm::radians(25.0f);
+    const float trimPitch = m_jetPitchTrim * glm::radians(20.0f);
+    target.flaperonRight = m_directRoll + trimRoll;
+    target.flaperonLeft = -m_directRoll - trimRoll;
+    target.stabilator = m_directPitch - trimPitch;
+    target.rudder = m_directYaw;
+    m_jet->setDirectSurfaceTarget(target);
+}
+
+// [翼面检查] 静止/飞行中按 K 进入：1-5 选择翼面组，←/→ 或 [ ] 调整，0 归零。
+// 飞行中只覆盖视觉偏角，飞行力学仍由 FBW 计算；这样可以在不改变飞行状态的情况下观察翼面。
 void Application::setSurfaceTest(bool enabled)
 {
     if (m_jet == nullptr || m_surfaceTest == enabled)
         return;
-    if (enabled && m_jetFlying)
-    {
-        std::cout << "[Surface] exit jet flight first (J), then press K\n";
-        return;
-    }
 
     m_surfaceTest = enabled;
     if (enabled)
@@ -350,13 +627,17 @@ void Application::setSurfaceTest(bool enabled)
         m_surfaceGroup = 0;
         m_jet->clearSurfaceTestAngles();
 
-        // 后右上方视角：能同时看到副翼、平尾、垂尾和喷口。
-        const glm::vec3 focus = m_jet->focusPoint();
-        m_camera.setPosition(focus + glm::vec3(4.0f, 2.5f, 4.0f));
-        const glm::vec3 direction = glm::normalize(focus - m_camera.position());
-        m_camera.setYawPitch(glm::degrees(std::atan2(direction.z, direction.x)),
-                             glm::degrees(std::asin(std::clamp(direction.y, -1.0f, 1.0f))));
-        std::cout << "[Surface] inspection on; 1-5 select, left/right arrows or [ ] adjust, 0 reset, K exit\n";
+        if (!m_jetFlying)
+        {
+            // 后右上方视角：能同时看到副翼、平尾、垂尾和喷口。
+            const glm::vec3 focus = m_jet->focusPoint();
+            m_camera.setPosition(focus + glm::vec3(4.0f, 2.5f, 4.0f));
+            const glm::vec3 direction = glm::normalize(focus - m_camera.position());
+            m_camera.setYawPitch(glm::degrees(std::atan2(direction.z, direction.x)),
+                                 glm::degrees(std::asin(std::clamp(direction.y, -1.0f, 1.0f))));
+        }
+        std::cout << "[Surface] inspection on (" << (m_jetFlying ? "in flight, visual only" : "static")
+                  << "); 1-5 select, left/right arrows or [ ] adjust, 0 reset, K exit\n";
     }
     else
     {
@@ -408,28 +689,7 @@ void Application::updateSurfaceTest(float deltaSeconds)
         m_jet->setSurfaceTestAngle(group, glm::radians(m_surfaceTestAngles[group]));
 }
 
-// [驾驶交互] 自由观察时的标题提示；锚点和距离读取当前飞机 Model，因此会跟随飞机移动。
-void Application::updateInteractionPrompt()
-{
-    if (!m_window || !m_helicopter || m_driving)
-        return;
-    std::string prompt = m_title;
-    if (m_helicopter->canEnterFrom(m_camera.position()))
-        prompt += " | 按 G 驾驶直升机";
-    else
-    {
-        const float unitsPerMeter = glm::length(glm::vec3(m_helicopter->modelMatrix()[0])) / 2;
-        const float metres =
-            glm::distance(m_camera.position(), m_helicopter->interactionPoint()) / std::max(.0001f, unitsPerMeter);
-        std::ostringstream distance;
-        distance << std::fixed << std::setprecision(1) << metres;
-        prompt += " | 靠近座舱后按 G 驾驶 | 距离 " + distance.str() + " m";
-    }
-    glfwSetWindowTitle(m_window, prompt.c_str());
-}
-
 // [第三人称相机] run 在飞机 update 之后调用；此处跟随最新机体位置，并调整阴影覆盖范围。
-// 自由模式只更新交互提示，不把自由相机拉回飞机。
 void Application::updateVehicleCamera(float dt)
 {
     if (m_jetFlying && m_jet)
@@ -449,45 +709,15 @@ void Application::updateVehicleCamera(float dt)
             char loadFactorText[16] = {};
             std::snprintf(loadFactorText, sizeof(loadFactorText), "%.1f", m_jet->dynamics().loadFactor());
             const std::string title =
-                "喷气机 | W/S俯仰 A/D滚转 Q/E偏航 P自驾 Shift/Ctrl油门 T自动油门 J退出 | " +
+                "喷气机 | W/S俯仰 A/D滚转 Q/E偏航 Shift/Ctrl油门 T自动油门 J退出 | " +
                 std::to_string(static_cast<int>(m_jet->speedKmh())) + " km/h | 高度 " +
                 std::to_string(static_cast<int>(m_jet->altitudeMeters())) + " m | 过载 " + loadFactorText + "g | 油门 " +
                 std::to_string(static_cast<int>(m_jet->dynamics().throttle() * 100.0f)) + "% " +
-                (m_jetAutoThrottle ? "自动" : "手动") + (m_jetAutopilot ? " | 自驾开" : " | 自驾关");
+                (m_jetAutoThrottle ? "自动" : "手动");
             glfwSetWindowTitle(m_window, title.c_str());
             m_titleUpdateTime = .25f;
         }
         return;
-    }
-
-    if (!m_helicopter)
-        return;
-    if (m_helicopter->flightPhysicsEnabled())
-    {
-        const auto position = glm::vec3(m_helicopter->modelMatrix()[3]);
-        const auto direction = m_lightRig.normalizedDirection();
-        const auto shadow = position + direction * (position.y / std::max(.15f, -direction.y));
-        m_lightRig.setShadowFocus((position + shadow) * .5f, std::max(9.0f, glm::distance(position, shadow) * .6f + 5));
-    }
-    m_titleUpdateTime -= dt;
-    if (!m_driving)
-    {
-        if (m_titleUpdateTime <= 0)
-        {
-            updateInteractionPrompt();
-            m_titleUpdateTime = .25f;
-        }
-        return;
-    }
-    m_chaseCamera.update(m_helicopter->focusPoint(), dt, m_camera);
-    if (m_titleUpdateTime <= 0)
-    {
-        const auto& state = m_helicopter->dynamics().state();
-        const std::string title = "驾驶 | WASD移动 空格升/Ctrl降 Q/E转向 G退出 | " +
-                                  std::to_string(static_cast<int>(glm::length(state.velocity) * 3.6f)) +
-                                  " km/h | 高度 " + std::to_string(static_cast<int>(state.position.y)) + " m";
-        glfwSetWindowTitle(m_window, title.c_str());
-        m_titleUpdateTime = .25f;
     }
 }
 
@@ -570,7 +800,6 @@ void Application::setCameraPose(const glm::vec3& position, float yawDegrees, flo
 {
     m_camera.setPosition(position);
     m_camera.setYawPitch(yawDegrees, pitchDegrees);
-    updateInteractionPrompt();
 }
 
 void Application::setReflectionStrength(float strength)
@@ -812,10 +1041,8 @@ void Application::releaseResources()
     m_scene.clear();
     m_dice = nullptr;
     m_ground = nullptr;
-    m_helicopter = nullptr;
     m_jet = nullptr;
     m_jetFlying = false;
-    m_driving = false;
 
     glfwDestroyWindow(m_window);
     m_window = nullptr;
@@ -830,7 +1057,6 @@ void Application::createScene()
     if (m_jetOnly)
     {
         createGltfModel();
-        updateInteractionPrompt();
         return;
     }
 
@@ -840,30 +1066,11 @@ void Application::createScene()
     m_ground->setCastsShadow(false);
 
     // 骰子：单位立方体 + 六面材质 + 点数 + 自转，全部封装在 DiceObject。
-    if (!m_aircraftOnly)
-    {
-        m_dice = &m_scene.add<DiceObject>(DiceObject::createCubeMesh(), kCubeCenterHeight, kCubeScale,
-                                          glm::radians(kCubeInitialSpinDegrees), kCubeSpinAxis);
-    }
-
-    // Reference-inspired attack helicopter; geometry is reusable independently of Scene.
-    const auto attackModel = glm::scale(glm::translate(glm::mat4(1), glm::vec3(-2.8f, 1.0f, -1.4f)) *
-                                            glm::rotate(glm::mat4(1), glm::radians(-24.0f), glm::vec3(0, 1, 0)),
-                                        glm::vec3(.50f));
-    const PBRMaterial attackMaterial{glm::vec3(1), .25f, .50f, 1.0f, 1.0f};
-    // [载具创建] GL 上下文已建立；生成四份部件网格，再交给 Scene 持有载具对象。
-    // 若增加另一种载具，从此处替换/追加几何和 SceneObject，不要在渲染器中添加机型判断。
-    m_helicopter =
-        &m_scene.add<AttackHelicopterObject>(AttackHelicopterGeometry::createMeshes(), attackMaterial, attackModel);
+    m_dice = &m_scene.add<DiceObject>(DiceObject::createCubeMesh(), kCubeCenterHeight, kCubeScale,
+                                      glm::radians(kCubeInitialSpinDegrees), kCubeSpinAxis);
 
     // [glTF 模型] 可选的静态模型；加载失败只影响它自己。
-    // --aircraft-only 是 AH-64D 近景检查模式，不再额外加载大模型。
-    if (!m_aircraftOnly)
-    {
-        createGltfModel();
-    }
-
-    updateInteractionPrompt();
+    createGltfModel();
 }
 
 void Application::createGltfModel()
@@ -979,6 +1186,7 @@ void Application::createGltfModel()
 
     const size_t partCount = parts.size();
     m_jet = &m_scene.add<FixedWingObject>(std::move(parts), visualFromBody, initialState);
+    m_jetSpawnPosition = m_jet->initialPosition();
     // 1.5M 三角形的模型也会进入阴影 pass；卡顿时可用 --no-shadow 关闭。
     m_jet->setCastsShadow(true);
 
@@ -1071,14 +1279,18 @@ void Application::processInput(float deltaSeconds)
     if (m_surfaceTest)
     {
         updateSurfaceTest(deltaSeconds);
-        const float forward = axis(GLFW_KEY_W, GLFW_KEY_S);
-        const float right = axis(GLFW_KEY_D, GLFW_KEY_A);
-        const float worldUp = axis(GLFW_KEY_PAGE_UP, GLFW_KEY_PAGE_DOWN);
-        m_camera.moveLocal(forward, right, worldUp, deltaSeconds);
-        return;
+        // 静止检查时自由移动相机；飞行中继续走下面的飞行输入，不打断飞行。
+        if (!m_jetFlying)
+        {
+            const float forward = axis(GLFW_KEY_W, GLFW_KEY_S);
+            const float right = axis(GLFW_KEY_D, GLFW_KEY_A);
+            const float worldUp = axis(GLFW_KEY_PAGE_UP, GLFW_KEY_PAGE_DOWN);
+            m_camera.moveLocal(forward, right, worldUp, deltaSeconds);
+            return;
+        }
     }
 
-    // [喷气机] J 切换驾驶；飞行中优先处理喷气机输入，避免和自由相机/直升机争用按键。
+    // [喷气机] J 切换驾驶；飞行中优先处理喷气机输入，避免和自由相机争用按键。
     const bool jetToggleDown = glfwGetKey(m_window, GLFW_KEY_J) == GLFW_PRESS;
     if (jetToggleDown && !m_jetToggleWasDown)
         setJetFlying(!m_jetFlying);
@@ -1086,12 +1298,14 @@ void Application::processInput(float deltaSeconds)
 
     if (m_jetFlying && m_jet)
     {
-        // 飞行摇杆习惯：S 拉杆抬头，W 推杆低头；A/D 滚转，Q/E 偏航。
+        // 默认恢复之前的 FBW 手感；M 才切到可选的直接翼面模式。
+        // B 切换机轮刹车；Backspace 回到初始停机状态。
         const float pitch = axis(GLFW_KEY_S, GLFW_KEY_W);
         const float roll = axis(GLFW_KEY_D, GLFW_KEY_A);
         const float yaw = axis(GLFW_KEY_E, GLFW_KEY_Q);
+        const float groundSteer = axis(GLFW_KEY_KP_6, GLFW_KEY_KP_4);
+        const bool groundedNow = m_jet->dynamics().state().grounded;
 
-        // B 切换机轮刹车；Backspace 回到初始停机状态。
         const bool brakeDown = glfwGetKey(m_window, GLFW_KEY_B) == GLFW_PRESS;
         if (brakeDown && !m_jetBrakeWasDown)
         {
@@ -1099,6 +1313,16 @@ void Application::processInput(float deltaSeconds)
             m_jet->setBrakes(m_jetBrakes);
         }
         m_jetBrakeWasDown = brakeDown;
+
+        const bool gearDown = glfwGetKey(m_window, GLFW_KEY_L) == GLFW_PRESS;
+        if (gearDown && !m_jetGearToggleWasDown)
+        {
+            m_jetGearDown = !m_jetGearDown;
+            m_jet->setGearDown(m_jetGearDown);
+            m_jetGearAutoRetractArmed = false;
+            std::cout << "[Jet] gear " << (m_jetGearDown ? "down" : "up") << '\n';
+        }
+        m_jetGearToggleWasDown = gearDown;
 
         const bool resetDown = glfwGetKey(m_window, GLFW_KEY_BACKSPACE) == GLFW_PRESS;
         if (resetDown && !m_jetResetWasDown)
@@ -1121,6 +1345,27 @@ void Application::processInput(float deltaSeconds)
         }
         m_jetAutoThrottleWasDown = autoToggleDown;
 
+        updateTrim(deltaSeconds);
+
+        // M 进入/退出可选的直接翼面模式；默认仍是之前的 FBW 速率指令手感。
+        const bool directToggleDown = glfwGetKey(m_window, GLFW_KEY_M) == GLFW_PRESS;
+        if (directToggleDown && !m_jetDirectToggleWasDown)
+        {
+            if (m_jetDirectSurfaces)
+            {
+                resetDirectSurfaces(true);
+                std::cout << "[Jet] direct surfaces off; FBW manual\n";
+            }
+            else
+            {
+                enterDirectSurfaces();
+            }
+        }
+        m_jetDirectToggleWasDown = directToggleDown;
+
+        if (m_jetDirectSurfaces)
+            updateDirectSurfaces(deltaSeconds);
+
         if (throttleUp || throttleDown)
         {
             if (m_jetAutoThrottle)
@@ -1138,36 +1383,30 @@ void Application::processInput(float deltaSeconds)
             m_jetThrottle = m_jet->dynamics().throttle();
         }
 
-        // P 切换自动驾驶；一旦有俯仰/滚转/偏航输入，自动退出自驾并保持手动姿态。
-        const bool autopilotToggleDown = glfwGetKey(m_window, GLFW_KEY_P) == GLFW_PRESS;
-        if (autopilotToggleDown && !m_jetAutopilotWasDown)
-        {
-            m_jetAutopilot = !m_jetAutopilot;
-            m_jet->setAutopilot(m_jetAutopilot);
-        }
-        m_jetAutopilotWasDown = autopilotToggleDown;
-
+        // P 已移除；没有姿态自动驾驶，也没有自动降落，只保留自动油门。
         flight::FixedWingControls controls;
-        controls.pitch = pitch;
-        controls.roll = roll;
-        controls.yaw = yaw;
         controls.throttle = m_jetThrottle;
-        const bool manualAttitude = std::abs(pitch) > 0.01f || std::abs(roll) > 0.01f || std::abs(yaw) > 0.01f;
-        if (manualAttitude && m_jetAutopilot)
+        if (groundedNow)
         {
-            m_jetAutopilot = false;
-            m_jet->setAutopilot(false);
+            // 地面只让微调值和小键盘转向进入控制链；W/S/A/D/Q/E 不生效。
+            controls.pitch = m_jetPitchTrim;
+            controls.roll = m_jetRollTrim;
+            controls.yaw = groundSteer;
+            if (m_fbwVisualActive)
+                clearFbwVisualSurfaces();
+        }
+        else if (!m_jetDirectSurfaces)
+        {
+            // 恢复之前的 FBW 速率指令手感：W/S/A/D/Q/E 是连续摇杆输入。
+            controls.pitch = std::clamp(pitch + m_jetPitchTrim, -1.0f, 1.0f);
+            controls.roll = std::clamp(roll + m_jetRollTrim, -1.0f, 1.0f);
+            controls.yaw = yaw;
+            updateFbwVisualSurfaces(deltaSeconds);
         }
         m_jet->setManualControls(controls);
         m_jet->setThrottleControl(!m_jetAutoThrottle, m_jetThrottle);
         return;
     }
-
-    // [驾驶交互] G 仅在按下边沿触发；离得太远时按住 G 再靠近，也不会自动进入。
-    const bool interactDown = glfwGetKey(m_window, GLFW_KEY_G) == GLFW_PRESS;
-    if (interactDown && !m_interactWasDown)
-        setDriving(!m_driving);
-    m_interactWasDown = interactDown;
 
     float forward = axis(GLFW_KEY_W, GLFW_KEY_S);
     const float right = axis(GLFW_KEY_D, GLFW_KEY_A);
@@ -1180,50 +1419,13 @@ void Application::processInput(float deltaSeconds)
 
     // 空格切换自转：必须做边沿检测。直接 if (spaceDown) toggle() 会在按住的每一帧翻转。
     const bool spaceDown = (glfwGetKey(m_window, GLFW_KEY_SPACE) == GLFW_PRESS);
-    if (spaceDown && !m_spaceWasDown && !m_driving)
+    if (spaceDown && !m_spaceWasDown)
     {
         toggleCubeSpin();
     }
     m_spaceWasDown = spaceDown;
 
-    if (m_helicopter)
-    {
-        const bool rotorToggleDown = glfwGetKey(m_window, GLFW_KEY_R) == GLFW_PRESS;
-        if (rotorToggleDown && !m_rotorToggleWasDown)
-            m_helicopter->toggleRotors();
-        m_rotorToggleWasDown = rotorToggleDown;
-        if (m_driving)
-        {
-            // [驾驶输入] 机头航向只由 Q/E 积分；鼠标只改变观察轨道。
-            const float pedals = axis(GLFW_KEY_E, GLFW_KEY_Q);
-            // Mouse orbit is free-look only. E turns the nose right, which is
-            // negative world-Y yaw for the aircraft's +X forward convention.
-            m_pilotHeading = std::remainder(m_pilotHeading - glm::radians(pedals * 70 * deltaSeconds), 6.28318530718f);
-            flight::FlightControls controls;
-            const float speed = m_helicopter->dynamics().parameters().maxSpeed *
-                                (glfwGetKey(m_window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ? 1.6f : 1.0f);
-            // Movement follows the aircraft's actual heading, not the free-look camera.
-            controls.horizontalVelocity = m_helicopter->movementDirection(axis(GLFW_KEY_W, GLFW_KEY_S), right) * speed;
-            // [驾驶输入] 升降独立于机头倾角/相机 pitch，避免抬头看就上升。
-            controls.climb = std::clamp(worldUp + (spaceDown ? 1.0f : 0.0f) -
-                                            (glfwGetKey(m_window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ? 1.0f : 0.0f),
-                                        -1.0f, 1.0f);
-            controls.heading = m_pilotHeading;
-            controls.pedals = -pedals;
-            controls.stabilatorTrim = axis(GLFW_KEY_C, GLFW_KEY_Z);
-            m_helicopter->setFlightControls(controls);
-        }
-        else if (m_helicopter->flightPhysicsEnabled())
-            m_helicopter->clearFlightControls();
-        else
-        {
-            m_helicopter->setPedalInput(axis(GLFW_KEY_E, GLFW_KEY_Q));
-            m_helicopter->setStabilatorInput(axis(GLFW_KEY_C, GLFW_KEY_Z));
-        }
-    }
-
-    if (!m_driving)
-        m_camera.moveLocal(forward, right, worldUp, deltaSeconds);
+    m_camera.moveLocal(forward, right, worldUp, deltaSeconds);
 }
 
 // --- 渲染 -----------------------------------------------------------------
@@ -1509,8 +1711,8 @@ void Application::onCursorPosition(GLFWwindow* window, double xPosition, double 
         return;
     }
 
-    // [第三人称相机] 驾驶/喷气机只更新观察轨道，不修改飞行指令。
-    if (application->m_jetFlying || application->m_driving)
+    // [第三人称相机] 喷气机只更新观察轨道，不修改飞行指令。
+    if (application->m_jetFlying)
         application->m_chaseCamera.mouseMovement(static_cast<float>(deltaX), static_cast<float>(deltaY));
     else
         application->m_camera.processMouseMovement(static_cast<float>(deltaX), static_cast<float>(deltaY));
@@ -1527,8 +1729,8 @@ void Application::onScroll(GLFWwindow* window, double xOffset, double yOffset)
     }
 
     // 滚轮：只累加目标高度，由 Camera::updateElevation() 每帧平滑逼近。
-    // [第三人称相机] 同一个滚轮输入按模式分流：驾驶缩放，自由观察升降。
-    if (application->m_jetFlying || application->m_driving)
+    // [第三人称相机] 同一个滚轮输入按模式分流：喷气机缩放，自由观察升降。
+    if (application->m_jetFlying)
         application->m_chaseCamera.zoom(static_cast<float>(yOffset));
     else
         application->m_camera.addElevation(static_cast<float>(yOffset) * kWheelElevationStep);
@@ -1559,19 +1761,14 @@ void Application::drawOverlay()
 
     m_overlay.beginFrame(m_framebufferWidth, m_framebufferHeight);
 
-    // 速度药丸：喷气机飞行时显示喷气机速度，否则沿用直升机/静态显示。
-    const float speedKmh =
-        (m_jetFlying && m_jet)
-            ? m_jet->speedKmh()
-            : (m_helicopter && m_helicopter->flightPhysicsEnabled()
-                   ? glm::length(m_helicopter->dynamics().state().velocity) * 3.6f
-                   : 0.0f);
+    // 速度药丸：喷气机飞行时显示喷气机速度，否则为 0。
+    const float speedKmh = (m_jetFlying && m_jet) ? m_jet->speedKmh() : 0.0f;
     char speedText[128] = {};
     if (m_jetFlying && m_jet)
     {
-        std::snprintf(speedText, sizeof(speedText), "速度 %.1f km/h · 油门 %.0f%% %s · 过载 %.1fg %s", speedKmh,
+        std::snprintf(speedText, sizeof(speedText), "速度 %.1f km/h · 油门 %.0f%% %s · 过载 %.1fg", speedKmh,
                       m_jet->dynamics().throttle() * 100.0f, m_jetAutoThrottle ? "自动" : "手动",
-                      m_jet->dynamics().loadFactor(), m_jetAutopilot ? "自驾开" : "自驾关");
+                      m_jet->dynamics().loadFactor());
     }
     else
     {
@@ -1598,7 +1795,8 @@ void Application::drawOverlay()
         const glm::vec4 normalColor(0.82f, 0.84f, 0.86f, 0.85f);
         const char* names[5] = {"flaperon", "前缘襟翼", "全动平尾", "方向舵", "喷口"};
         char line[128] = {};
-        m_overlay.text(panelPosition + glm::vec2(14.0f, 8.0f), "翼面检查（K 退出）", selectedColor, 1.0f);
+        m_overlay.text(panelPosition + glm::vec2(14.0f, 8.0f),
+                       m_jetFlying ? "翼面检查·飞行（视觉，K 退出）" : "翼面检查（K 退出）", selectedColor, 1.0f);
         for (int i = 0; i < 5; ++i)
         {
             std::snprintf(line, sizeof(line), "%d %s  %+6.1f°", i + 1, names[i], m_surfaceTestAngles[i]);
@@ -1610,8 +1808,45 @@ void Application::drawOverlay()
         m_overlay.text(panelPosition + glm::vec2(14.0f, 8.0f + 7.0f * lineHeight), "0 归零", normalColor, 0.9f);
     }
 
-    // [飞行 HUD] 左下角仪表：高度/升降/航向/迎角/接地/刹车/自驾/状态。
+    // [原位指向] 左上角半透明浅绿箭头：机头对准原位时指正上，目标在右侧指右，后方指下。
+    if (m_jetFlying && m_jet)
+    {
+        const flight::RigidBodyState& state = m_jet->dynamics().state();
+        glm::vec3 toSpawn = m_jetSpawnPosition - state.position;
+        toSpawn.y = 0.0f;
+        const float distance = glm::length(toSpawn);
+        float relativeBearing = 0.0f;
+        if (distance > 0.5f)
+        {
+            const glm::vec3 local = glm::conjugate(state.orientation) * toSpawn;
+            relativeBearing = std::atan2(local.z, local.x);
+        }
+
+        const glm::vec2 center(72.0f, 72.0f);
+        const float radius = 48.0f;
+        const glm::vec4 arrowColor(0.45f, 1.0f, 0.65f, 0.68f);
+        m_overlay.fillRect(center - glm::vec2(radius + 4.0f, radius + 4.0f),
+                           glm::vec2((radius + 4.0f) * 2.0f, (radius + 4.0f) * 2.0f),
+                           glm::vec4(0.02f, 0.08f, 0.05f, 0.34f), radius + 4.0f);
+        m_overlay.fillRect(center - glm::vec2(radius, radius), glm::vec2(radius * 2.0f, radius * 2.0f),
+                           glm::vec4(0.03f, 0.11f, 0.07f, 0.28f), radius);
+
+        const glm::vec2 direction(std::sin(relativeBearing), -std::cos(relativeBearing));
+        const glm::vec2 tip = center + direction * (radius - 8.0f);
+        const glm::vec2 headBase = tip - direction * 18.0f;
+        const glm::vec2 normal(-direction.y, direction.x);
+        m_overlay.line(center, headBase, 6.0f, arrowColor);
+        m_overlay.line(tip, headBase + normal * 11.0f, 4.5f, arrowColor);
+        m_overlay.line(tip, headBase - normal * 11.0f, 4.5f, arrowColor);
+
+        char distanceText[64] = {};
+        std::snprintf(distanceText, sizeof(distanceText), "原位 %.0f m", distance);
+        m_overlay.text(glm::vec2(24.0f, 128.0f), distanceText, glm::vec4(0.55f, 1.0f, 0.70f, 0.70f), 0.8f);
+    }
+
+    // [飞行 HUD] 左下角仪表：高度/升降/下降率/航向/迎角/接地/刹车/自动油门/状态。
     bool stallWarning = false;
+    bool pullUpWarning = false;
     if (m_jetFlying && m_jet)
     {
         const flight::RigidBodyState& state = m_jet->dynamics().state();
@@ -1623,14 +1858,17 @@ void Application::drawOverlay()
         const float alphaDegrees = glm::degrees(m_jet->dynamics().angleOfAttack());
         const float stallDegrees = glm::degrees(parameters.stallAngle);
         stallWarning = std::fabs(alphaDegrees) > stallDegrees * 0.9f;
+        const float descentRate = -state.velocity.y;
+        pullUpWarning = m_jetGearDown == false && state.position.y <= 50.0f && descentRate > 1.0f;
 
         const float lineHeight = m_overlay.lineHeight();
-        const glm::vec2 panelSize(300.0f, lineHeight * 9.0f + 20.0f);
+        const glm::vec2 panelSize(300.0f, lineHeight * 14.0f + 20.0f);
         const glm::vec2 panelPosition(24.0f, static_cast<float>(m_framebufferHeight) - panelSize.y - 48.0f);
         m_overlay.fillRect(panelPosition, panelSize, glm::vec4(0.05f, 0.06f, 0.09f, 0.80f), 10.0f);
 
         const glm::vec4 textColor(0.82f, 0.86f, 0.90f, 0.95f);
         const glm::vec4 warnColor(1.0f, 0.42f, 0.35f, 1.0f);
+        const glm::vec4 directColor(0.70f, 0.93f, 1.0f, 1.0f);
         const auto row = [&](int index, const char* text, const glm::vec4& color)
         {
             m_overlay.text(panelPosition + glm::vec2(14.0f, 8.0f + static_cast<float>(index) * lineHeight), text, color,
@@ -1655,19 +1893,58 @@ void Application::drawOverlay()
         row(5, line, m_jetHardLanding ? warnColor : textColor);
         std::snprintf(line, sizeof(line), "刹车 %s", m_jetBrakes ? "开" : "关");
         row(6, line, textColor);
-        std::snprintf(line, sizeof(line), "自驾 %s", m_jetAutopilot ? "开" : "关");
+        std::snprintf(line, sizeof(line), "自动油门 %s", m_jetAutoThrottle ? "开" : "关");
         row(7, line, textColor);
         std::snprintf(line, sizeof(line), "状态 %s", state.grounded ? (m_jetHardLanding ? "地面·重着陆" : "地面") : "空中");
         row(8, line, m_jetHardLanding ? warnColor : textColor);
+        if (m_jetDirectSurfaces)
+            std::snprintf(line, sizeof(line), "控制 直接翼面");
+        else if (m_fbwVisualActive)
+            std::snprintf(line, sizeof(line), "控制 FBW·视觉");
+        else
+            std::snprintf(line, sizeof(line), "控制 FBW");
+        row(9, line, textColor);
+        if (m_jetDirectSurfaces)
+            std::snprintf(line, sizeof(line), "翼面 平尾%+.1f 副翼%+.1f 舵%+.1f",
+                          glm::degrees(m_directPitch), glm::degrees(m_directRoll), glm::degrees(m_directYaw));
+        else if (m_fbwVisualActive)
+            std::snprintf(line, sizeof(line), "翼面(视觉) 平尾%+.1f 副翼%+.1f 舵%+.1f",
+                          glm::degrees(m_fbwVisualPitch), glm::degrees(m_fbwVisualRoll),
+                          glm::degrees(m_fbwVisualYaw));
+        else
+            std::snprintf(line, sizeof(line), "翼面 --");
+        row(10, line, (m_jetDirectSurfaces || m_fbwVisualActive) ? directColor : textColor);
+
+        std::snprintf(line, sizeof(line), "下降率 %+.1f m/s", descentRate);
+        row(11, line, descentRate > 1.0f ? warnColor : textColor);
+        std::snprintf(line, sizeof(line), "起落架 %s", m_jetGearDown ? "放下" : "收起");
+        row(12, line, (m_jetGearDown && state.position.y <= 52.0f) ? warnColor : textColor);
+
+        std::snprintf(line, sizeof(line), "微调 俯仰%+.0f%% 滚转%+.0f%%", m_jetPitchTrim * 100.0f,
+                      m_jetRollTrim * 100.0f);
+        row(13, line, (m_jetPitchTrim != 0.0f || m_jetRollTrim != 0.0f) ? directColor : textColor);
     }
 
-    if (stallWarning && std::fmod(glfwGetTime(), 0.6) < 0.4)
+    if (std::fmod(glfwGetTime(), 0.6) < 0.4)
     {
-        const char* warning = "STALL";
-        const float scale = 2.0f;
-        const float width = m_overlay.textWidth(warning, scale);
-        m_overlay.text(glm::vec2((static_cast<float>(m_framebufferWidth) - width) * 0.5f, 34.0f), warning,
-                       glm::vec4(1.0f, 0.25f, 0.20f, 1.0f), scale);
+        float warningY = 34.0f;
+        if (pullUpWarning)
+        {
+            const char* warning = "PULL UP";
+            const float scale = 2.2f;
+            const float width = m_overlay.textWidth(warning, scale);
+            m_overlay.text(glm::vec2((static_cast<float>(m_framebufferWidth) - width) * 0.5f, warningY), warning,
+                           glm::vec4(1.0f, 0.58f, 0.18f, 1.0f), scale);
+            warningY = 78.0f;
+        }
+        if (stallWarning)
+        {
+            const char* warning = "STALL";
+            const float scale = 2.0f;
+            const float width = m_overlay.textWidth(warning, scale);
+            m_overlay.text(glm::vec2((static_cast<float>(m_framebufferWidth) - width) * 0.5f, warningY), warning,
+                           glm::vec4(1.0f, 0.25f, 0.20f, 1.0f), scale);
+        }
     }
 
     if (!m_uiVisible)
@@ -1769,20 +2046,10 @@ void Application::drawOverlay()
     }
 
     m_overlay.section("载具");
-    bool rotors = m_rotorsEnabled;
-    if (m_overlay.checkboxRow("旋翼", rotors))
-    {
-        m_rotorsEnabled = rotors;
-        setHelicopterRotorsEnabled(rotors);
-    }
-
     char speedLine[64] = {};
     std::snprintf(speedLine, sizeof(speedLine), "%.1f km/h", speedKmh);
     m_overlay.valueRow("速度", speedLine);
-    if (m_jetFlying)
-        m_overlay.valueRow("驾驶", "喷气机（J 退出）");
-    else
-        m_overlay.valueRow("驾驶", m_driving ? "直升机（G 退出）" : "G 靠近后进入");
+    m_overlay.valueRow("驾驶", m_jetFlying ? "喷气机（J 退出）" : "自由观察");
 
     m_overlay.endPanel();
     m_overlay.endFrame();

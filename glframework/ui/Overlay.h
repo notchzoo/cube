@@ -42,6 +42,8 @@ public:
 
     // --- 基础图元 ---
     void fillRect(const glm::vec2& position, const glm::vec2& size, const glm::vec4& color, float radius = 0.0f);
+    /// 任意方向的粗线（用旋转的圆角四边形实现），用于 HUD 箭头。
+    void line(const glm::vec2& from, const glm::vec2& to, float width, const glm::vec4& color);
     void text(const glm::vec2& position, const std::string& utf8, const glm::vec4& color, float scale = 1.0f);
     float textWidth(const std::string& utf8, float scale = 1.0f);
     float lineHeight() const { return m_lineHeight; }

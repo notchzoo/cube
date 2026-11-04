@@ -4,7 +4,7 @@
 
 namespace flight
 {
-/// [飞行物理] 刚体状态。由 HelicopterDynamics::step 写入，场景对象读取后生成 Model。
+/// [飞行物理] 刚体状态。由 FixedWingDynamics 写入，场景对象读取后生成 Model。
 struct RigidBodyState
 {
     glm::vec3 position{0};             // 世界坐标，米；不是缩放后的渲染坐标

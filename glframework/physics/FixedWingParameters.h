@@ -49,6 +49,8 @@ struct FixedWingParameters
     float angularDamping = 0.8f;
 
     float gearHeight = 1.4f;      // m，重心到地面的高度
+    float landingAgl = 3.2f;      // m，低空自动改平/起落架减速触发离地高度
+    float takeoffSpeed = 70.0f;   // m/s，低于此速度地面不允许抬轮
     float groundFriction = 0.02f; // 1/s，滚动阻力；不是刹车
     float gravity = 9.81f;
 };

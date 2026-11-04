@@ -1,10 +1,10 @@
-﻿#pragma once
+#pragma once
 #include <glm/glm.hpp>
 
 namespace flight
 {
 /// [固定翼物理] 驾驶指令，全部是归一化输入。
-/// 与直升机 FlightControls 分开：固定翼用俯仰/滚转/偏航角速度指令 + 油门。
+/// 俯仰/滚转/偏航角速度指令 + 油门。
 struct FixedWingControls
 {
     float pitch = 0.0f;    // [-1,1]，正值抬头

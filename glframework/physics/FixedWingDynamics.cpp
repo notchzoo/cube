@@ -53,7 +53,10 @@ void FixedWingDynamics::reset(const RigidBodyState& state)
     m_loadFactor = 0.0f;
     m_sideslip = 0.0f;
     m_surfaceAngles = {};
+    m_directTarget = {};
+    m_directSurfaces = false;
     m_brakes = false;
+    m_gearDown = true;
     m_touchdownEvent = false;
     m_touchdownVerticalSpeed = 0.0f;
     m_accumulator = 0.0;
@@ -69,12 +72,21 @@ void FixedWingDynamics::setControls(const FixedWingControls& controls)
     m_controls.throttle = sanitized(controls.throttle, 0.0f, 1.0f);
 }
 
+void FixedWingDynamics::setDirectSurfaceMode(bool enabled)
+{
+    if (m_directSurfaces == enabled)
+        return;
+    m_directSurfaces = enabled;
+    if (enabled)
+        m_directTarget = m_surfaceAngles;
+}
+
 void FixedWingDynamics::advance(float deltaSeconds)
 {
     if (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.0f)
         return;
 
-    // 与直升机一致：帧时间只负责累积，物理按固定步长推进，避免帧率影响结果。
+    // 帧时间只负责累积，物理按固定步长推进，避免帧率影响结果。
     m_accumulator += std::min(static_cast<double>(deltaSeconds), 0.25);
     while (m_accumulator + 1e-8 >= fixedStep)
     {
@@ -169,19 +181,26 @@ void FixedWingDynamics::step(float dt)
     const float speedAfter = glm::length(m_state.velocity);
     if (speedAfter > p.maxAirspeed)
         m_state.velocity *= p.maxAirspeed / speedAfter;
+
+    // 起落架/前轮未收起时，离地 3.2 m 以内快速减速（不是几何起落架，只是状态惩罚）。
+    const float agl = m_state.position.y - p.gearHeight;
+    if (m_gearDown && agl <= p.landingAgl && agl > -0.5f && !m_state.grounded && m_state.velocity.y <= 0.1f)
+    {
+        const float horizontalSpeed = glm::length(glm::vec2(m_state.velocity.x, m_state.velocity.z));
+        if (horizontalSpeed > 1.0e-3f)
+        {
+            const float newSpeed = std::max(0.0f, horizontalSpeed - 10.0f * dt);
+            const float scale = newSpeed / horizontalSpeed;
+            m_state.velocity.x *= scale;
+            m_state.velocity.z *= scale;
+        }
+    }
+
     m_state.position += m_state.velocity * dt;
 
-    // 速率指令辅助飞控：目标角速度由驾驶输入给出，飞控把目标角加速度反解成翼面偏角，
-    // 再用翼面力矩推动角速度积分；视觉偏角和气动力矩使用同一份 ControlSurfaceAngles。
-    // 侧滑产生的风标偏航让机头跟随速度矢量，倾斜飞行时才能自然改变水平航向。
-    const float weathervaneYawRate = std::clamp(-p.weathervaneGain * beta, -0.6f, 0.6f);
-    const glm::vec3 targetRate(m_controls.roll * p.maxRollRate,
-                               -m_controls.yaw * p.maxYawRate + weathervaneYawRate,
-                               m_controls.pitch * p.maxPitchRate);
-    const glm::vec3 rateError = targetRate - m_state.angularVelocity;
-    const glm::vec3 desiredAcceleration = rateError * p.rateGain - m_state.angularVelocity * p.angularDamping;
-    const glm::vec3 desiredMoment = p.inertia * desiredAcceleration;
-
+    // 两类控制律：
+    // 1) FBW 速率指令：把目标角速度/角加速度反解成翼面偏角；
+    // 2) 直接翼面：驾驶给固定小偏角，偏角直接产生力矩，并加气动阻尼。
     const float rollEffectiveness =
         2.0f * dynamicPressure * p.wingArea * p.wingSpan * p.aileronMomentCoefficient;
     const float yawEffectiveness = dynamicPressure * p.wingArea * p.wingSpan * p.rudderMomentCoefficient;
@@ -193,32 +212,69 @@ void FixedWingDynamics::step(float dt)
         return current + std::clamp(target - current, -maxStep, maxStep);
     };
 
-    const float aileronTarget = std::clamp(
-        std::abs(rollEffectiveness) > 1.0e-3f ? desiredMoment.x / rollEffectiveness : 0.0f, -p.maxAileronAngle,
-        p.maxAileronAngle);
-    const float stabilatorTarget = std::clamp(
-        std::abs(pitchEffectiveness) > 1.0e-3f ? desiredMoment.z / pitchEffectiveness : 0.0f,
-        -p.maxStabilatorAngle, p.maxStabilatorAngle);
-    const float rudderTarget = std::clamp(
-        std::abs(yawEffectiveness) > 1.0e-3f ? desiredMoment.y / yawEffectiveness : 0.0f, -p.maxRudderAngle,
-        p.maxRudderAngle);
+    if (m_directSurfaces)
+    {
+        // 前缘襟翼仍按迎角自动调度；喷口保持视觉目标。
+        m_directTarget.leadingEdgeFlap = std::clamp((alpha - 0.08f) * 1.5f, 0.0f, 0.30f);
+        m_surfaceAngles.flaperonRight =
+            moveSurface(m_surfaceAngles.flaperonRight, std::clamp(m_directTarget.flaperonRight, -p.maxAileronAngle,
+                                                                  p.maxAileronAngle));
+        m_surfaceAngles.flaperonLeft =
+            moveSurface(m_surfaceAngles.flaperonLeft, std::clamp(m_directTarget.flaperonLeft, -p.maxAileronAngle,
+                                                                 p.maxAileronAngle));
+        m_surfaceAngles.stabilator = moveSurface(
+            m_surfaceAngles.stabilator, std::clamp(m_directTarget.stabilator, -p.maxStabilatorAngle, p.maxStabilatorAngle));
+        m_surfaceAngles.rudder =
+            moveSurface(m_surfaceAngles.rudder, std::clamp(m_directTarget.rudder, -p.maxRudderAngle, p.maxRudderAngle));
+        m_surfaceAngles.leadingEdgeFlap = moveSurface(m_surfaceAngles.leadingEdgeFlap, m_directTarget.leadingEdgeFlap);
+        m_surfaceAngles.nozzlePitch = moveSurface(m_surfaceAngles.nozzlePitch, m_directTarget.nozzlePitch);
 
-    m_surfaceAngles.flaperonRight = moveSurface(m_surfaceAngles.flaperonRight, aileronTarget);
-    m_surfaceAngles.flaperonLeft = -m_surfaceAngles.flaperonRight;
-    m_surfaceAngles.stabilator = moveSurface(m_surfaceAngles.stabilator, stabilatorTarget);
-    m_surfaceAngles.rudder = moveSurface(m_surfaceAngles.rudder, rudderTarget);
+        const float rollMoment = 0.5f * rollEffectiveness * (m_surfaceAngles.flaperonRight - m_surfaceAngles.flaperonLeft);
+        const float pitchMoment = pitchEffectiveness * m_surfaceAngles.stabilator;
+        const float yawMoment = yawEffectiveness * m_surfaceAngles.rudder;
+        glm::vec3 angularAcceleration(rollMoment / p.inertia.x, yawMoment / p.inertia.y, pitchMoment / p.inertia.z);
+        angularAcceleration -= m_state.angularVelocity * p.angularDamping;
+        m_state.angularVelocity += angularAcceleration * dt;
+    }
+    else
+    {
+        // 速率指令辅助飞控：目标角速度由驾驶输入给出，飞控把目标角加速度反解成翼面偏角。
+        // 侧滑产生的风标偏航让机头跟随速度矢量，倾斜飞行时才能自然改变水平航向。
+        const float weathervaneYawRate = std::clamp(-p.weathervaneGain * beta, -0.6f, 0.6f);
+        const glm::vec3 targetRate(m_controls.roll * p.maxRollRate,
+                                   -m_controls.yaw * p.maxYawRate + weathervaneYawRate,
+                                   m_controls.pitch * p.maxPitchRate);
+        const glm::vec3 rateError = targetRate - m_state.angularVelocity;
+        const glm::vec3 desiredAcceleration = rateError * p.rateGain - m_state.angularVelocity * p.angularDamping;
+        const glm::vec3 desiredMoment = p.inertia * desiredAcceleration;
 
-    // 前缘襟翼按迎角调度，喷口偏转暂时只做视觉；两者不参与当前力矩近似。
-    const float leadingEdgeTarget = std::clamp((alpha - 0.08f) * 1.5f, 0.0f, 0.30f);
-    m_surfaceAngles.leadingEdgeFlap = moveSurface(m_surfaceAngles.leadingEdgeFlap, leadingEdgeTarget);
-    m_surfaceAngles.nozzlePitch = moveSurface(m_surfaceAngles.nozzlePitch,
-                                              std::clamp(-m_controls.pitch * 0.2f, -0.2f, 0.2f));
+        const float aileronTarget = std::clamp(
+            std::abs(rollEffectiveness) > 1.0e-3f ? desiredMoment.x / rollEffectiveness : 0.0f, -p.maxAileronAngle,
+            p.maxAileronAngle);
+        const float stabilatorTarget = std::clamp(
+            std::abs(pitchEffectiveness) > 1.0e-3f ? desiredMoment.z / pitchEffectiveness : 0.0f,
+            -p.maxStabilatorAngle, p.maxStabilatorAngle);
+        const float rudderTarget = std::clamp(
+            std::abs(yawEffectiveness) > 1.0e-3f ? desiredMoment.y / yawEffectiveness : 0.0f, -p.maxRudderAngle,
+            p.maxRudderAngle);
 
-    const float rollMoment = rollEffectiveness * m_surfaceAngles.flaperonRight;
-    const float pitchMoment = pitchEffectiveness * m_surfaceAngles.stabilator;
-    const float yawMoment = yawEffectiveness * m_surfaceAngles.rudder;
-    m_state.angularVelocity +=
-        glm::vec3(rollMoment / p.inertia.x, yawMoment / p.inertia.y, pitchMoment / p.inertia.z) * dt;
+        m_surfaceAngles.flaperonRight = moveSurface(m_surfaceAngles.flaperonRight, aileronTarget);
+        m_surfaceAngles.flaperonLeft = -m_surfaceAngles.flaperonRight;
+        m_surfaceAngles.stabilator = moveSurface(m_surfaceAngles.stabilator, stabilatorTarget);
+        m_surfaceAngles.rudder = moveSurface(m_surfaceAngles.rudder, rudderTarget);
+
+        // 前缘襟翼按迎角调度，喷口偏转暂时只做视觉；两者不参与当前力矩近似。
+        const float leadingEdgeTarget = std::clamp((alpha - 0.08f) * 1.5f, 0.0f, 0.30f);
+        m_surfaceAngles.leadingEdgeFlap = moveSurface(m_surfaceAngles.leadingEdgeFlap, leadingEdgeTarget);
+        m_surfaceAngles.nozzlePitch = moveSurface(m_surfaceAngles.nozzlePitch,
+                                                  std::clamp(-m_controls.pitch * 0.2f, -0.2f, 0.2f));
+
+        const float rollMoment = rollEffectiveness * m_surfaceAngles.flaperonRight;
+        const float pitchMoment = pitchEffectiveness * m_surfaceAngles.stabilator;
+        const float yawMoment = yawEffectiveness * m_surfaceAngles.rudder;
+        m_state.angularVelocity +=
+            glm::vec3(rollMoment / p.inertia.x, yawMoment / p.inertia.y, pitchMoment / p.inertia.z) * dt;
+    }
     m_state.angularVelocity = limited(m_state.angularVelocity, 4.0f);
 
     const float angularSpeed = glm::length(m_state.angularVelocity);
@@ -226,6 +282,20 @@ void FixedWingDynamics::step(float dt)
     {
         const glm::quat delta = glm::angleAxis(angularSpeed * dt, m_state.angularVelocity / angularSpeed);
         m_state.orientation = glm::normalize(m_state.orientation * delta);
+    }
+
+    // 离地 3.2 m 内自动改平俯仰并收回左右 flaperon，模拟接地前的降落姿态。
+    const float landingAgl = m_state.position.y - p.gearHeight;
+    if (!m_state.grounded && landingAgl < p.landingAgl && landingAgl > -0.5f && m_state.velocity.y < -0.2f)
+    {
+        const glm::vec3 forward = m_state.orientation * glm::vec3(1.0f, 0.0f, 0.0f);
+        const float pitch = std::asin(std::clamp(forward.y, -1.0f, 1.0f));
+        const glm::vec3 right = m_state.orientation * glm::vec3(0.0f, 0.0f, 1.0f);
+        const float alpha = 1.0f - std::exp(-10.0f * dt);
+        m_state.orientation = glm::normalize(glm::angleAxis(-pitch * alpha, right) * m_state.orientation);
+        m_state.angularVelocity.z = 0.0f;
+        m_surfaceAngles.flaperonRight = 0.0f;
+        m_surfaceAngles.flaperonLeft = 0.0f;
     }
 
     resolveGround(dt);
@@ -247,24 +317,65 @@ void FixedWingDynamics::resolveGround(float dt)
 
     if (m_state.grounded)
     {
-        if (m_state.velocity.y < 0.0f)
-            m_state.velocity.y = 0.0f;
+        // 地面滑跑时左右 flaperon 保持水平。
+        m_surfaceAngles.flaperonRight = 0.0f;
+        m_surfaceAngles.flaperonLeft = 0.0f;
 
-        // 刹车让滚动阻力明显增大；松开 B 后回到正常滚动阻力。
-        const float frictionRate = m_brakes ? 4.0f : m_parameters.groundFriction;
-        const float friction = std::exp(-frictionRate * dt);
-        m_state.velocity.x *= friction;
-        m_state.velocity.z *= friction;
+        // 刹车提供 10 m/s^2 的平稳减速度；松开 B 后回到正常滚动阻力。
+        if (m_brakes)
+        {
+            const float horizontalSpeed = glm::length(glm::vec2(m_state.velocity.x, m_state.velocity.z));
+            if (horizontalSpeed > 1.0e-3f)
+            {
+                const float newSpeed = std::max(0.0f, horizontalSpeed - 10.0f * dt);
+                const float scale = newSpeed / horizontalSpeed;
+                m_state.velocity.x *= scale;
+                m_state.velocity.z *= scale;
+            }
+        }
+        else
+        {
+            const float friction = std::exp(-m_parameters.groundFriction * dt);
+            m_state.velocity.x *= friction;
+            m_state.velocity.z *= friction;
+        }
         m_state.angularVelocity *= std::exp(-(m_brakes ? 10.0f : 6.0f) * dt);
 
-        // 低速地面转向：刹车时不允许转向，避免停住后原地打转。
         const float groundSpeed = glm::length(glm::vec3(m_state.velocity.x, 0.0f, m_state.velocity.z));
+
+        // 未达到抬轮速度前，移动方向的 Y 分量保持为 0，不允许离地。
+        if (groundSpeed < m_parameters.takeoffSpeed)
+            m_state.velocity.y = 0.0f;
+        else if (m_state.velocity.y < 0.0f)
+            m_state.velocity.y = 0.0f;
+
+        // 地面左右滚转无效：锁滚转角速度并强制机翼水平（保留航向和俯仰）。
+        m_state.angularVelocity.x = 0.0f;
+        {
+            const glm::vec3 forward = m_state.orientation * glm::vec3(1.0f, 0.0f, 0.0f);
+            const glm::vec3 right = m_state.orientation * glm::vec3(0.0f, 0.0f, 1.0f);
+            const float bank = std::asin(std::clamp(right.y, -1.0f, 1.0f));
+            m_state.orientation = glm::normalize(glm::angleAxis(bank, forward) * m_state.orientation);
+        }
+
+        // 低速地面转向：刹车时不允许转向，避免停住后原地打转。
         if (!m_brakes && groundSpeed > 2.0f)
         {
             const float targetYawRate = -m_controls.yaw * 0.45f;
             m_state.angularVelocity.y +=
                 (targetYawRate - m_state.angularVelocity.y) * (1.0f - std::exp(-4.0f * dt));
         }
+
+        // 未达到抬轮速度前，禁止抬头：锁俯仰角速度并把机头压回水平。
+        if (groundSpeed < m_parameters.takeoffSpeed)
+        {
+            m_state.angularVelocity.z = 0.0f;
+            const glm::vec3 forward = m_state.orientation * glm::vec3(1.0f, 0.0f, 0.0f);
+            const float pitch = std::asin(std::clamp(forward.y, -1.0f, 1.0f));
+            const glm::vec3 right = m_state.orientation * glm::vec3(0.0f, 0.0f, 1.0f);
+            m_state.orientation = glm::normalize(glm::angleAxis(-pitch, right) * m_state.orientation);
+        }
+
         if (m_brakes && groundSpeed < 0.5f)
         {
             m_state.velocity.x = 0.0f;

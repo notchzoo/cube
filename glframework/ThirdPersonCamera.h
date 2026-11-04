@@ -16,8 +16,6 @@ public:
     void followHeading(float headingDegrees, float dt);
     void update(glm::vec3 target, float dt, Camera& camera);                 // 平滑跟随，并让 Camera 看向 target
     glm::vec3 horizontalForward() const;
-    /// 观察方向的辅助换算；驾驶 WASD 使用 AttackHelicopterObject::movementDirection，勿混用。
-    glm::vec3 movementDirection(float forward, float right) const;
     float distance() const { return m_distance; }
 
 private:

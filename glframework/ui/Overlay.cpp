@@ -381,6 +381,35 @@ void Overlay::addQuad(const glm::vec2& position, const glm::vec2& size, const gl
     }
 }
 
+void Overlay::line(const glm::vec2& from, const glm::vec2& to, float width, const glm::vec4& color)
+{
+    const glm::vec2 delta = to - from;
+    const float length = glm::length(delta);
+    if (length <= 1.0e-3f || width <= 0.0f)
+        return;
+
+    const glm::vec2 direction = delta / length;
+    const glm::vec2 normal(-direction.y, direction.x);
+    const glm::vec2 offset = normal * (width * 0.5f);
+    const glm::vec2 center = (from + to) * 0.5f;
+    const glm::vec2 halfSize(length * 0.5f, width * 0.5f);
+
+    const glm::vec2 corners[4] = {from + offset, to + offset, to - offset, from - offset};
+    const int indices[6] = {0, 1, 2, 0, 2, 3};
+    for (int index : indices)
+    {
+        Vertex vertex;
+        vertex.position = corners[index];
+        vertex.local = corners[index] - center;
+        vertex.halfSize = halfSize;
+        vertex.uv = glm::vec2(0.0f);
+        vertex.color = color;
+        vertex.radius = width * 0.5f;
+        vertex.kind = 0.0f;
+        m_vertices.push_back(vertex);
+    }
+}
+
 void Overlay::fillRect(const glm::vec2& position, const glm::vec2& size, const glm::vec4& color, float radius)
 {
     addQuad(position, size, color, radius, 0.0f, glm::vec2(0.0f), glm::vec2(0.0f));

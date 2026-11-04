@@ -20,18 +20,11 @@ struct Options
     float reflectionStrength = 0.55f;
     bool mouseLook = true;
     bool hidden = false;
-    bool aircraftOnly = false;
     bool jetOnly = false;
-    bool drive = false; // [驾驶交互] --drive 只尝试进入；仍受座舱距离限制，需配合 --camera
-    bool rotors = true;
     bool modelEnabled = true;
     std::string modelPath = "su_57.glb"; // 相对路径按资产目录解析
     bool flyJet = false;
     bool surfaceTest = false;
-    float mainRotorAngle = 0.0f;
-    float tailRotorAngle = 0.0f;
-    float tailPitch = 0.0f;
-    float stabilatorAngle = 0.0f;
     float runFor = 0.0f;
     bool pips = true;
     bool spin = true;
@@ -69,15 +62,6 @@ void printUsage()
   --camera <x y z yaw pitch> 摆放相机（yaw / pitch 单位为度）
   --sun <radiance>           太阳辐照度
   --sun-texture <file.bmp>   太阳贴图（亮度当 alpha）
-
-载具:
-  --aircraft-only            只显示飞机和地面，便于近距离检查机头
-  --drive                    启动时尝试驾驶（需配合 --camera 靠近座舱）
-  --no-rotors                启动时暂停旋翼
-  --main-rotor-angle <度>    主旋翼初始相位
-  --tail-rotor-angle <度>    尾桨初始相位
-  --tail-pitch <度>          尾桨初始变距（夹紧到 ±18°）
-  --stabilator-angle <度>    水平尾翼初始偏角（夹紧到 ±20°）
 
 模型:
   --model <file.glb>         加载外部 glTF/GLB（默认 su_57.glb，相对 asset/）
@@ -189,14 +173,6 @@ int main(int argc, char** argv)
         {
             options.jetOnly = true;
         }
-        else if (name == "--aircraft-only")
-        {
-            options.aircraftOnly = true;
-        }
-        else if (name == "--no-rotors")
-        {
-            options.rotors = false;
-        }
         else if (name == "--model")
         {
             if (!takeString(options.modelPath))
@@ -217,10 +193,6 @@ int main(int argc, char** argv)
         {
             options.surfaceTest = true;
         }
-        else if (name == "--drive")
-        {
-            options.drive = true;
-        }
         else if (name == "--no-pips")
         {
             options.pips = false;
@@ -232,34 +204,6 @@ int main(int argc, char** argv)
         else if (name == "--ui")
         {
             options.overlayPanel = true;
-        }
-        else if (name == "--main-rotor-angle")
-        {
-            if (!takeFloat(options.mainRotorAngle))
-            {
-                return 2;
-            }
-        }
-        else if (name == "--tail-rotor-angle")
-        {
-            if (!takeFloat(options.tailRotorAngle))
-            {
-                return 2;
-            }
-        }
-        else if (name == "--tail-pitch")
-        {
-            if (!takeFloat(options.tailPitch))
-            {
-                return 2;
-            }
-        }
-        else if (name == "--stabilator-angle")
-        {
-            if (!takeFloat(options.stabilatorAngle))
-            {
-                return 2;
-            }
         }
         else if (name == "--run-for")
         {
@@ -365,7 +309,6 @@ int main(int argc, char** argv)
     }
     // 截图模式不需要窗口：隐藏后仍然正常渲染。
     application.setWindowVisible(!(options.hidden || !options.screenshotPath.empty()));
-    application.setAircraftOnly(options.aircraftOnly);
     application.setJetOnly(options.jetOnly);
 
     if (!application.initialize())
@@ -380,10 +323,7 @@ int main(int argc, char** argv)
     application.enableShadows(options.shadows);
     application.setMouseLookEnabled(options.mouseLook);
     application.setPipsEnabled(options.pips);
-    application.setHelicopterRotorsEnabled(options.rotors);
     application.setOverlayPanelVisible(options.overlayPanel);
-    application.setHelicopterPose(options.mainRotorAngle, options.tailRotorAngle, options.tailPitch,
-                                  options.stabilatorAngle);
 
     // 自转：命令行只注入初始配置，运行期由 Application 自己推进（空格切换）。
     application.setCubeSpinEnabled(options.spin);
@@ -421,11 +361,7 @@ int main(int argc, char** argv)
         }
     }
 
-    // [启动入口] 先应用相机位置，再尝试驾驶，确保 --camera 与 G 使用相同的距离检查。
-    if (options.drive)
-    {
-        application.setDriving(true);
-    }
+    // [启动入口] 先应用相机位置，再进入可选的喷气机飞行。
     if (options.flyJet)
     {
         application.setJetFlying(true);
