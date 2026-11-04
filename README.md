@@ -85,10 +85,4 @@ HUD 现在还显示下降率、起落架状态和微调杆量；低空带起落�
 - 直接翼面是实验模式，默认仍使用 FBW。
 - 前缘襟翼和喷口尚未接入升力/矢量推力力矩。
 
-## 截图
 
-![Su-57 迷彩](docs/renderingcube-su57.png)
-
-![Su-57 飞行 HUD](docs/renderingcube-su57-flight.png)
-
-![飞行中翼面检查](docs/renderingcube-su57-surfaces-flight.png)
